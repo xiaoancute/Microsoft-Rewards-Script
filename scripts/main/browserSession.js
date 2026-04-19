@@ -1,4 +1,5 @@
 import fs from 'fs'
+import path from 'path'
 import { chromium } from 'patchright'
 import { newInjectedContext } from 'fingerprint-injector'
 import {
@@ -11,12 +12,9 @@ import {
     loadAccounts,
     findAccountByEmail,
     getRuntimeBase,
-    getSessionPath,
-    loadCookies,
-    loadFingerprint,
-    buildProxyConfig,
-    setupCleanupHandlers
+    buildProxyConfig
 } from '../utils.js'
+import { getBrowserSessionState } from './browserSessionSupport.js'
 
 const __dirname = getDirname(import.meta.url)
 const projectRoot = getProjectRoot(__dirname)
@@ -41,52 +39,39 @@ if (!account) {
 
 async function main() {
     const runtimeBase = getRuntimeBase(projectRoot, args.dev)
-    const sessionBase = getSessionPath(runtimeBase, config.sessionPath, args.email)
-
     log('INFO', '验证会话数据...')
-
-    if (!fs.existsSync(sessionBase)) {
-        log('ERROR', `会话目录不存在: ${sessionBase}`)
-        log('ERROR', '请确保此账户的会话已创建')
-        process.exit(1)
-    }
 
     if (!config.baseURL) {
         log('ERROR', 'baseURL 在 config.json 中未设置')
         process.exit(1)
     }
 
-    let cookies = await loadCookies(sessionBase, 'desktop')
-    let sessionType = 'desktop'
+    const session = await getBrowserSessionState({
+        runtimeBase,
+        sessionPath: config.sessionPath,
+        email: args.email,
+        saveFingerprint: account.saveFingerprint
+    }).catch(error => {
+        log('ERROR', error.message)
+        process.exit(1)
+    })
 
-    if (cookies.length === 0) {
-        log('WARN', '未找到桌面会话 cookies，尝试移动会话...')
-        cookies = await loadCookies(sessionBase, 'mobile')
-        sessionType = 'mobile'
+    const { sessionBase, sessionType, isExistingSession, isMobile, fingerprintEnabled, cookies, fingerprint } = session
 
-        if (cookies.length === 0) {
-            log('ERROR', '在桌面或移动会话中未找到 cookies')
-            log('ERROR', `会话目录: ${sessionBase}`)
-            log('ERROR', '请确保此账户存在有效会话')
-            process.exit(1)
+    if (isExistingSession) {
+        if (sessionType === 'mobile') {
+            log('INFO', `使用移动会话 (${cookies.length} 个 cookies)`)
+        } else {
+            log('INFO', `使用桌面会话 (${cookies.length} 个 cookies)`)
         }
-
-        log('INFO', `使用移动会话 (${cookies.length} 个 cookies)`)
-    }
-
-    const isMobile = sessionType === 'mobile'
-    const fingerprintEnabled = isMobile ? account.saveFingerprint?.mobile : account.saveFingerprint?.desktop
-
-    let fingerprint = null
-    if (fingerprintEnabled) {
-        fingerprint = await loadFingerprint(sessionBase, sessionType)
-        if (!fingerprint) {
-            log('ERROR', `${sessionType} 的指纹功能已启用但未找到指纹文件`)
-            log('ERROR', `预期文件: ${sessionBase}/session_fingerprint_${sessionType}.json`)
-            log('ERROR', '当明确启用指纹时，无法在没有指纹的情况下启动浏览器')
-            process.exit(1)
+        if (fingerprint) {
+            log('INFO', `已加载 ${sessionType} 指纹`)
+        } else if (fingerprintEnabled) {
+            log('WARN', `${sessionType} 已启用指纹保存，但当前未找到指纹文件，将以默认上下文继续`)
         }
-        log('INFO', `已加载 ${sessionType} 指纹`)
+    } else {
+        log('WARN', `未找到 ${args.email} 的现有 session，将启动全新浏览器用于首次登录`)
+        log('INFO', `首次登录成功后会把 cookies 保存到: ${sessionBase}`)
     }
 
     const proxy = buildProxyConfig(account)
@@ -102,7 +87,7 @@ async function main() {
     const userAgent = fingerprint?.fingerprint?.navigator?.userAgent || fingerprint?.fingerprint?.userAgent || null
 
     log('INFO', `会话: ${args.email} (${sessionType})`)
-    log('INFO', `  Cookies: ${cookies.length}`)
+    log('INFO', `  Cookies: ${cookies.length}${isExistingSession ? '' : ' (首次登录前为空)'}`)
     log('INFO', `  指纹: ${fingerprint ? '是' : '否'}`)
     log('INFO', `  用户代理: ${userAgent || '默认'}`)
     log('INFO', `  代理: ${proxy ? '是' : '否'}`)
@@ -153,15 +138,74 @@ async function main() {
     }
 
     const page = await context.newPage()
+    const cookiesFile = path.join(sessionBase, `session_${sessionType}.json`)
+
+    let shuttingDown = false
+    let autosaveTimer
+    const persistCookies = async (reason = 'autosave') => {
+        try {
+            if (!context) {
+                return
+            }
+
+            const latestCookies = await context.cookies()
+            if (!latestCookies.length) {
+                return
+            }
+
+            await fs.promises.mkdir(sessionBase, { recursive: true })
+            await fs.promises.writeFile(cookiesFile, JSON.stringify(latestCookies, null, 2), 'utf8')
+            log('INFO', `[${reason}] 已保存 ${latestCookies.length} 个 cookies 到 ${cookiesFile}`)
+        } catch (error) {
+            log('WARN', `[${reason}] 保存 cookies 失败: ${error.message}`)
+        }
+    }
+
+    const shutdown = async (signal = 'browser-closed') => {
+        if (shuttingDown) {
+            return
+        }
+        shuttingDown = true
+
+        if (autosaveTimer) {
+            clearInterval(autosaveTimer)
+        }
+
+        await persistCookies(signal)
+
+        try {
+            if (browser?.isConnected?.()) {
+                await browser.close()
+            }
+        } catch {}
+
+        process.exit(0)
+    }
+
+    page.on('framenavigated', () => {
+        void persistCookies('navigation')
+    })
+    page.on('close', () => {
+        void shutdown('page-close')
+    })
+    browser.on('disconnected', () => {
+        void shutdown('browser-disconnected')
+    })
+    autosaveTimer = setInterval(() => {
+        void persistCookies('interval')
+    }, 5000)
+    autosaveTimer.unref()
+
     await page.goto(config.baseURL, { waitUntil: 'domcontentloaded' })
 
     log('SUCCESS', '浏览器已打开并加载了会话')
     log('INFO', `导航至: ${config.baseURL}`)
 
-    setupCleanupHandlers(async () => {
-        if (browser?.isConnected?.()) {
-            await browser.close()
-        }
+    process.on('SIGINT', () => {
+        void shutdown('SIGINT')
+    })
+    process.on('SIGTERM', () => {
+        void shutdown('SIGTERM')
     })
 }
 

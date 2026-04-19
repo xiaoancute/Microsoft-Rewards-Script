@@ -94,7 +94,11 @@ export function loadJsonFile(possiblePaths, required = true) {
 export function loadConfig(projectRoot, isDev = false) {
     const possiblePaths = isDev
         ? [path.join(projectRoot, 'src', 'config.json')]
-        : [path.join(projectRoot, 'dist', 'config.json'), path.join(projectRoot, 'config.json')]
+        : [
+              path.join(projectRoot, 'src', 'config.json'),
+              path.join(projectRoot, 'dist', 'config.json'),
+              path.join(projectRoot, 'config.json')
+          ]
 
     const result = loadJsonFile(possiblePaths, true)
 
@@ -118,9 +122,10 @@ export function loadAccounts(projectRoot, isDev = false) {
     const possiblePaths = isDev
         ? [path.join(projectRoot, 'src', 'accounts.dev.json')]
         : [
+              path.join(projectRoot, 'src', 'accounts.json'),
               path.join(projectRoot, 'dist', 'accounts.json'),
               path.join(projectRoot, 'accounts.json'),
-              path.join(projectRoot, 'accounts.example.json')
+              path.join(projectRoot, 'src', 'accounts.example.json')
           ]
 
     return loadJsonFile(possiblePaths, true)
