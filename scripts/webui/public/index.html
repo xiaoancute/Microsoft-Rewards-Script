@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Microsoft Rewards 管理页</title>
+    <script>
+        // FOUC 防闪烁：在样式加载前就把主题定下来
+        (function () {
+            try {
+                var stored = localStorage.getItem('webui_theme')
+                var theme = stored === 'dark' || stored === 'light'
+                    ? stored
+                    : (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+                document.documentElement.setAttribute('data-theme', theme)
+            } catch (e) {
+                document.documentElement.setAttribute('data-theme', 'light')
+            }
+        })()
+    </script>
+    <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+    <header class="topbar">
+        <div class="brand">
+            <span class="logo">🎁</span>
+            <h1>Microsoft Rewards 管理页</h1>
+        </div>
+        <nav class="tabs">
+            <button class="tab active" data-tab="home">首页</button>
+            <button class="tab" data-tab="accounts">账号</button>
+            <button class="tab" data-tab="sessions">Session</button>
+            <button class="tab" data-tab="config">配置</button>
+            <button class="tab" data-tab="schedule">定时</button>
+            <button class="tab" data-tab="env">环境</button>
+            <button class="tab" data-tab="logs">运行日志</button>
+            <button class="tab" data-tab="loghistory">历史日志</button>
+        </nav>
+        <div class="topbar-meta" id="topbar-meta">
+            <button class="theme-toggle" id="theme-toggle" title="切换日间 / 夜间模式" aria-label="切换主题">
+                <span class="theme-icon theme-icon-sun">☀</span>
+                <span class="theme-icon theme-icon-moon">🌙</span>
+            </button>
+            <span class="dot" id="status-dot"></span>
+            <span id="status-text">连接中...</span>
+        </div>
+    </header>
+
+    <main>
+        <!-- 首页 dashboard -->
+        <section class="panel" id="panel-home">
+            <div class="panel-head">
+                <h2>概览</h2>
+                <button class="btn btn-sm" id="btn-dash-refresh">刷新</button>
+            </div>
+            <div class="grid dash-grid">
+                <div class="card dash-card">
+                    <h3>运行</h3>
+                    <div class="dash-big" id="dash-run-state">空闲</div>
+                    <div class="dash-sub" id="dash-run-sub">—</div>
+                    <div class="dash-actions">
+                        <button class="btn btn-primary btn-sm" id="dash-run-now">▶ 立即运行</button>
+                        <button class="btn btn-sm btn-danger hidden" id="dash-run-stop">⏹ 停止</button>
+                    </div>
+                </div>
+                <div class="card dash-card">
+                    <h3>定时任务</h3>
+                    <div class="dash-big" id="dash-timer-state">未安装</div>
+                    <div class="dash-sub" id="dash-timer-sub">点「定时」Tab 配置</div>
+                    <div class="dash-actions">
+                        <button class="btn btn-sm" data-go-tab="schedule">管理</button>
+                    </div>
+                </div>
+                <div class="card dash-card">
+                    <h3>账号</h3>
+                    <div class="dash-big" id="dash-account-count">0</div>
+                    <div class="dash-sub" id="dash-account-sub">—</div>
+                    <div class="dash-actions">
+                        <button class="btn btn-sm" data-go-tab="accounts">去添加</button>
+                    </div>
+                </div>
+                <div class="card dash-card">
+                    <h3>环境检查</h3>
+                    <div class="dash-big" id="dash-env-state">—</div>
+                    <div class="dash-sub" id="dash-env-sub">—</div>
+                    <div class="dash-actions">
+                        <button class="btn btn-sm" data-go-tab="env">查看详情</button>
+                    </div>
+                </div>
+            </div>
+            <div class="card" id="dash-quickstart">
+                <h3>首次使用向导</h3>
+                <ol class="dash-steps" id="dash-steps"></ol>
+            </div>
+        </section>
+
+        <!-- 账号 -->
+        <section class="panel hidden" id="panel-accounts">
+            <div class="panel-head">
+                <h2>账号</h2>
+                <button class="btn btn-primary" id="btn-add-account">+ 添加账号</button>
+            </div>
+            <div class="tablewrap">
+                <table id="accounts-table">
+                    <thead>
+                        <tr>
+                            <th>邮箱</th>
+                            <th>地区</th>
+                            <th>语言</th>
+                            <th>2FA</th>
+                            <th>代理</th>
+                            <th>保存指纹</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="accounts-tbody">
+                        <tr><td colspan="7" class="empty">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Session -->
+        <section class="panel hidden" id="panel-sessions">
+            <div class="panel-head">
+                <h2>浏览器 Session</h2>
+                <div>
+                    <button class="btn" id="btn-refresh-sessions">刷新</button>
+                    <button class="btn btn-danger" id="btn-clear-all-sessions">清除全部</button>
+                </div>
+            </div>
+            <p class="hint">
+                点「打开浏览器」会弹出 Chromium 窗口。若账号未登录，请在窗口里手动完成登录，关闭窗口后 session 会自动保存到本地。
+            </p>
+            <div class="tablewrap">
+                <table id="sessions-table">
+                    <thead>
+                        <tr>
+                            <th>邮箱</th>
+                            <th>桌面 cookies</th>
+                            <th>移动 cookies</th>
+                            <th>指纹</th>
+                            <th>最后登录</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="sessions-tbody">
+                        <tr><td colspan="6" class="empty">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- 配置 -->
+        <section class="panel hidden" id="panel-config">
+            <div class="panel-head">
+                <h2>config.json</h2>
+                <div>
+                    <button class="btn" id="btn-reload-config">重新加载</button>
+                    <button class="btn btn-primary" id="btn-save-config">保存</button>
+                </div>
+            </div>
+            <p class="hint">改完保存后，下次运行立即生效。如果你是用 <code>npm start</code> 跑编译产物，仍需 <button class="inline-link" id="btn-build-from-config">重新构建</button>。</p>
+            <form id="config-form"></form>
+        </section>
+
+        <!-- 环境 -->
+        <section class="panel hidden" id="panel-env">
+            <div class="panel-head">
+                <h2>环境 & 修复</h2>
+                <button class="btn btn-sm" id="btn-env-refresh">重新检测</button>
+            </div>
+            <p class="hint">
+                所有会改系统的操作都走这里——别回命令行。安装系统依赖可能需要 sudo，会自动走 pkexec / sudo。
+            </p>
+            <div class="card" id="env-platform-card">
+                <h3>系统信息</h3>
+                <dl id="env-platform-dl"></dl>
+            </div>
+            <div class="card" id="env-checks-card">
+                <h3>健康检查</h3>
+                <ul class="check-list" id="env-checks"></ul>
+            </div>
+            <div class="card" id="env-actions-card">
+                <h3>修复 / 维护动作</h3>
+                <p class="field-hint">点一下就在后台启动任务，日志流到下方或「运行日志」Tab。</p>
+                <div class="action-grid" id="env-actions"></div>
+            </div>
+        </section>
+
+        <!-- 定时任务 -->
+        <section class="panel hidden" id="panel-schedule">
+            <div class="panel-head">
+                <h2>定时任务 (systemd user timer)</h2>
+                <button class="btn btn-sm" id="btn-schedule-refresh">刷新</button>
+            </div>
+            <p class="hint">
+                让脚本每天自动跑。仅 Linux 可用。关机后还想触发需要 <code>sudo loginctl enable-linger $USER</code> 一次。
+            </p>
+            <div class="card">
+                <h3>每日任务 (microsoft-rewards.timer)</h3>
+                <dl id="schedule-reward-dl"></dl>
+                <div class="row-actions">
+                    <button class="btn btn-primary btn-sm" id="schedule-install">安装并启用</button>
+                    <button class="btn btn-sm" id="schedule-trigger">立即触发一次</button>
+                    <button class="btn btn-danger btn-sm" id="schedule-uninstall">卸载</button>
+                </div>
+                <div class="cfg-field" style="margin-top:14px;max-width:360px;">
+                    <label>执行时间 (OnCalendar 表达式)</label>
+                    <div style="display:flex;gap:6px;">
+                        <input type="text" id="schedule-oncalendar" placeholder="*-*-* 07:00:00" />
+                        <button class="btn btn-sm" id="schedule-save">保存</button>
+                    </div>
+                    <p class="field-hint">参考：<code>*-*-* 07:00:00</code>（每天 7:00）<code>*-*-* 07,19:00:00</code>（每天 7 和 19 点）</p>
+                </div>
+            </div>
+            <div class="card">
+                <h3>管理页自启 (microsoft-rewards-webui.service)</h3>
+                <p class="field-hint">装上后这个管理页本身会开机自启、异常自动重启。之后连 <code>./manage.sh</code> 都不用敲。</p>
+                <dl id="schedule-webui-dl"></dl>
+                <div class="row-actions">
+                    <button class="btn btn-primary btn-sm" id="schedule-webui-install">安装并启用</button>
+                    <button class="btn btn-danger btn-sm" id="schedule-webui-uninstall">卸载</button>
+                </div>
+            </div>
+            <div class="card">
+                <h3>journalctl 日志</h3>
+                <div class="row-actions">
+                    <button class="btn btn-sm" id="schedule-journal-load">加载最近 200 行</button>
+                </div>
+                <pre class="logbox small" id="schedule-journal"></pre>
+            </div>
+        </section>
+
+        <!-- 历史日志 -->
+        <section class="panel hidden" id="panel-loghistory">
+            <div class="panel-head">
+                <h2>历史日志</h2>
+                <div>
+                    <button class="btn btn-sm" id="btn-loghist-refresh">刷新</button>
+                    <button class="btn btn-sm btn-danger" id="btn-loghist-clear">清空所有</button>
+                </div>
+            </div>
+            <p class="hint">
+                每天一个 <code>logs/YYYY-MM-DD.log</code>，由脚本自动写入。点文件查看末尾内容，或下载完整文件。
+            </p>
+            <div class="split-view">
+                <div class="tablewrap" style="max-width:340px;flex-shrink:0;">
+                    <table id="loghist-table">
+                        <thead><tr><th>文件</th><th>大小</th><th>修改时间</th></tr></thead>
+                        <tbody id="loghist-tbody">
+                            <tr><td colspan="3" class="empty">还没有日志</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="log-view" style="flex:1;min-width:0;">
+                    <div class="log-view-head">
+                        <span id="loghist-selected-name">请选择一个文件</span>
+                        <div>
+                            <a class="btn btn-sm hidden" id="loghist-download">下载</a>
+                            <button class="btn btn-sm btn-danger hidden" id="loghist-delete">删除</button>
+                        </div>
+                    </div>
+                    <pre class="logbox" id="loghist-content"></pre>
+            </div>
+        </section>
+
+        <!-- 运行日志 -->
+        <section class="panel hidden" id="panel-logs">
+            <div class="panel-head">
+                <h2>运行 & 日志</h2>
+                <div>
+                    <button class="btn btn-primary" id="btn-run-start">▶ 立即运行</button>
+                    <button class="btn" id="btn-run-build">🔨 重新构建</button>
+                    <button class="btn btn-danger hidden" id="btn-run-stop">⏹ 停止</button>
+                </div>
+            </div>
+            <div class="jobs-row">
+                <label>查看任务:
+                    <select id="job-filter">
+                        <option value="">所有任务</option>
+                    </select>
+                </label>
+                <span id="job-status-pill" class="pill">空闲</span>
+            </div>
+            <pre class="logbox" id="logbox"></pre>
+        </section>
+    </main>
+
+    <!-- 账号编辑弹窗 -->
+    <dialog id="account-dialog">
+        <form method="dialog" id="account-form">
+            <h3 id="account-dialog-title">添加账号</h3>
+            <label>邮箱 <input type="email" name="email" required /></label>
+            <label>密码 <input type="password" name="password" /></label>
+            <p class="field-hint" id="password-hint">新账号必填；编辑时留空表示保持不变</p>
+            <label>TOTP 密钥（2FA，可选）<input type="text" name="totpSecret" /></label>
+            <label>恢复邮箱（可选）<input type="email" name="recoveryEmail" /></label>
+            <div class="row">
+                <label>地区 <input type="text" name="geoLocale" value="auto" /></label>
+                <label>语言 <input type="text" name="langCode" value="zh" /></label>
+            </div>
+            <fieldset>
+                <legend>代理 (可选)</legend>
+                <label>URL <input type="text" name="proxy.url" placeholder="http://host" /></label>
+                <div class="row">
+                    <label>端口 <input type="number" name="proxy.port" value="0" /></label>
+                    <label>用户名 <input type="text" name="proxy.username" /></label>
+                    <label>密码 <input type="password" name="proxy.password" /></label>
+                </div>
+                <label class="inline"><input type="checkbox" name="proxy.proxyAxios" /> 也代理 axios 请求</label>
+            </fieldset>
+            <fieldset>
+                <legend>保存浏览器指纹</legend>
+                <label class="inline"><input type="checkbox" name="saveFingerprint.mobile" checked /> 移动</label>
+                <label class="inline"><input type="checkbox" name="saveFingerprint.desktop" checked /> 桌面</label>
+            </fieldset>
+            <div class="dialog-actions">
+                <button type="button" class="btn" id="account-cancel">取消</button>
+                <button type="submit" class="btn btn-primary">保存</button>
+            </div>
+        </form>
+    </dialog>
+
+    <div class="toast-wrap" id="toast-wrap"></div>
+
+    <script src="/app.js" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+[Unit]
+Description=Microsoft Rewards Script (一次性运行任务)
+Documentation=https://github.com/TheNetsky/Microsoft-Rewards-Script
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=__PROJECT_DIR__
+ExecStart=__SHELL__ -lc '__NPM__ start'
+TimeoutStartSec=4h
+Nice=10
+# 减少偶发资源抢占
+CPUWeight=60
+IOWeight=60
+# 不要自动重启——每日由 timer 触发
+Restart=no
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

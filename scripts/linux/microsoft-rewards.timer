@@ -1,0 +1,12 @@
+[Unit]
+Description=每日触发 Microsoft Rewards Script
+
+[Timer]
+# 每天 07:00 触发；若关机错过则开机后补跑
+OnCalendar=*-*-* 07:00:00
+Persistent=true
+RandomizedDelaySec=30min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
