@@ -34,6 +34,8 @@ class Browser {
         '--no-first-run', // 不是首次运行
         '--no-default-browser-check', // 不检查默认浏览器
         '--disable-user-media-security=true', // 禁用用户媒体安全
+        '--disable-web-authentication-ui', // 禁用 WebAuthn 登录 UI（上游 v3 对齐）
+        '--disable-external-intent-requests', // 禁用外部 intent 请求（上游 v3 对齐）
         '--disable-blink-features=Attestation', // 禁用Blink特性认证
         '--disable-features=WebAuthentication,PasswordManagerOnboarding,PasswordManager,EnablePasswordsAccountStorage,Passkeys,WebAuthenticationProxy,U2F', // 禁用特定功能
         '--disable-save-password-bubble', // 禁用保存密码提示

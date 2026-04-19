@@ -17,14 +17,14 @@ export class CodeLogin {
                 .catch(() => null)
 
             if (visibleInput) {
-                await page.keyboard.type(code, { delay: 50 })
+                await this.bot.browser.utils.humanType(page, code)
                 this.bot.logger.info(this.bot.isMobile, 'LOGIN-CODE', 'Filled code input')
                 return true
             }
 
             const secondairyInput = await page.$(this.secondairyInputSelector)
             if (secondairyInput) {
-                await page.keyboard.type(code, { delay: 50 })
+                await this.bot.browser.utils.humanType(page, code)
                 this.bot.logger.info(this.bot.isMobile, 'LOGIN-CODE', 'Filled code input')
                 return true
             }

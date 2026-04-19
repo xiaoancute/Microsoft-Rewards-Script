@@ -270,4 +270,55 @@ export default class BrowserUtils {
             }
         })
     }
+
+    /**
+     * 仿真人打字：每字符基础延迟走 gamma-like 分布（多数偏低、偶尔偏高），
+     * 低概率插入 150-400ms 的"思考停顿"，空格前后略慢（词边界）。
+     *
+     * 用这个代替 page.keyboard.type(text, { delay: 50 })。
+     * 50ms 匀速是典型 bot 指纹，真人的 keydown 间隔直方图有明显偏态和重尾。
+     *
+     * @param page     Playwright Page
+     * @param text     要输入的字符串
+     * @param opts.baseMean  每字符平均 delay (ms)，默认 80
+     * @param opts.thinkProb 字符间插入思考停顿的概率 (0-1)，默认 0.05
+     */
+    async humanType(
+        page: Page,
+        text: string,
+        opts: { baseMean?: number; thinkProb?: number } = {}
+    ): Promise<void> {
+        const baseMean = opts.baseMean ?? 80
+        const thinkProb = opts.thinkProb ?? 0.05
+        const utils = this.bot.utils
+
+        for (let i = 0; i < text.length; i++) {
+            const ch = text[i] as string
+            await page.keyboard.type(ch, { delay: 0 })
+
+            // 已经输入完最后一个字符就不再等待
+            if (i === text.length - 1) break
+
+            // gamma-like：两个 0-1 均匀相加后加权取最小值 —— 形状近似 k=2 的 gamma
+            // mean ≈ baseMean；最小约 0.3*baseMean，偶发 3-4x 长尾
+            const r1 = Math.random()
+            const r2 = Math.random()
+            const shape = (r1 + r2) * 0.5 // 趋近正态 mean=0.5
+            // 把 [0,1] 映射到非对称范围：mean*(0.3 + 1.4*shape)，p95 ≈ mean*1.7
+            let delay = Math.max(10, Math.floor(baseMean * (0.3 + 1.4 * shape)))
+
+            // 词边界（空格前后）稍慢，模拟真人节奏
+            const next = text[i + 1]
+            if (ch === ' ' || next === ' ') {
+                delay = Math.floor(delay * 1.5)
+            }
+
+            // 偶发思考停顿
+            if (Math.random() < thinkProb) {
+                delay += utils.randomNumber(150, 400)
+            }
+
+            await utils.wait(delay)
+        }
+    }
 }

@@ -122,7 +122,7 @@ export class SearchOnBing extends Workers {
                 await this.bot.browser.utils.ghostClick(page, searchBar, { clickCount: 3 })
                 await searchBox.fill('')
 
-                await page.keyboard.type(query, { delay: 50 })
+                await this.bot.browser.utils.humanType(page, query)
                 await page.keyboard.press('Enter')
 
                 await this.bot.utils.wait(this.bot.utils.randomDelay(5000, 7000))

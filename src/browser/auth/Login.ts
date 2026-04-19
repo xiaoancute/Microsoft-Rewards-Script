@@ -287,6 +287,7 @@ export class Login {
         switch (state) {
             case 'ACCOUNT_LOCKED': {
                 const msg = '此账户已被锁定！从配置中移除并重新启动！'
+                this.bot.logger.alert(this.bot.isMobile, 'ACCOUNT-LOCKED', `${account.email} — ${msg}`)
                 this.bot.logger.error(this.bot.isMobile, 'LOGIN', msg)
                 throw new Error(msg)
             }

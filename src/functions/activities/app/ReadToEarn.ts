@@ -110,7 +110,7 @@ export class ReadToEarn extends Workers {
                     `文章间等待 | 文章=${i + 1}/${articleCount} | 延迟范围=${delayMin}-${delayMax}`
                 )
 
-                await this.bot.utils.wait(this.bot.utils.randomDelay(delayMin, delayMax))
+                await this.bot.utils.wait(this.bot.utils.randomDelay(delayMin, delayMax, 'lognormal'))
             }
 
             const finalBalance = Number(this.bot.userData.currentPoints ?? startBalance)

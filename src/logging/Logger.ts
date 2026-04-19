@@ -4,6 +4,7 @@ import fs from 'fs'
 import path from 'path'
 import { sendDiscord } from './Discord'
 import { sendNtfy } from './Ntfy'
+import { sendPushPlus } from './PushPlus'
 import type { MicrosoftRewardsBot } from '../index'
 import { errorDiagnostic } from '../util/ErrorDiagnostic'
 import type { LogFilter } from '../interface/Config'
@@ -14,6 +15,14 @@ export type ColorKey = keyof typeof chalk
 export interface IpcLog {
     content: string
     level: LogLevel
+}
+
+/**
+ * 独立的"紧急告警"消息——绕过 webhookLogFilter，保证封号等关键信号
+ * 永远能到达所有启用的 webhook。和 IpcLog 走独立通道避免被用户的过滤规则误杀。
+ */
+export interface IpcAlert {
+    content: string
 }
 
 type ChalkFn = (msg: string) => string
@@ -98,6 +107,41 @@ export class Logger {
 
     debug(isMobile: Platform, title: string, message: string | Error, color?: ColorKey) {
         return this.baseLog('debug', isMobile, title, message, color)
+    }
+
+    /**
+     * 紧急告警：用于账号被封、异常频发等必须立刻让用户知道的事。
+     *
+     * 和 info/warn/error 不同，alert 绕过 webhookLogFilter：
+     * 不管用户的 whitelist/blacklist 怎么设，都会发到所有启用的 webhook
+     *（Discord、ntfy、PushPlus）。控制台和本地日志文件照常输出。
+     */
+    alert(isMobile: Platform, title: string, message: string | Error) {
+        const now = new Date().toLocaleString()
+        const formatted = formatMessage(message)
+        const userName = this.bot.userData.userName ? this.bot.userData.userName : '主进程'
+        const cleanMsg = `[${now}] [${userName}] [🚨 ALERT] ${platformText(isMobile)} [${title}] ${formatted}`
+
+        writeLogToFile(cleanMsg)
+
+        const badge = platformBadge(isMobile)
+        const consoleStr = `[${now}] [${userName}] [🚨 ALERT] ${badge} [${title}] ${formatted}`
+        consoleOut('error', consoleStr, getColorFn('red'))
+
+        const { webhook } = this.bot.config
+        if (cluster.isPrimary) {
+            if (webhook.discord?.enabled && webhook.discord.url) {
+                sendDiscord(webhook.discord.url, cleanMsg, 'error')
+            }
+            if (webhook.ntfy?.enabled && webhook.ntfy.url) {
+                sendNtfy(webhook.ntfy, cleanMsg, 'error')
+            }
+            if (webhook.pushplus?.enabled && webhook.pushplus.token) {
+                sendPushPlus(webhook.pushplus, cleanMsg)
+            }
+        } else {
+            process.send?.({ __ipcAlert: { content: cleanMsg } } as { __ipcAlert: IpcAlert })
+        }
     }
 
     private baseLog(

@@ -18,7 +18,7 @@ export class RecoveryLogin {
                 .catch(() => null)
 
             if (visibleInput) {
-                await page.keyboard.type(email, { delay: 50 })
+                await this.bot.browser.utils.humanType(page, email)
                 await page.keyboard.press('Enter')
                 this.bot.logger.info(this.bot.isMobile, 'LOGIN-RECOVERY', 'Successfully filled email input field')
                 return true

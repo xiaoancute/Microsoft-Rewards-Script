@@ -9,7 +9,7 @@ import Browser from './browser/Browser'
 import BrowserFunc from './browser/BrowserFunc'
 import BrowserUtils from './browser/BrowserUtils'
 
-import { IpcLog, Logger } from './logging/Logger'
+import { IpcLog, IpcAlert, Logger } from './logging/Logger'
 import Utils from './util/Utils'
 import { loadAccounts, loadConfig } from './util/Load'
 import { checkNodeVersion } from './util/Validator'
@@ -195,6 +195,21 @@ export class MicrosoftRewardsBot {
             `启动微软奖励脚本 | v${pkg.version} | 账户数: ${totalAccounts} | 集群数: ${this.config.clusters}`
         )
 
+        // 风控告警：clusters>1 的场景下，如果多个账号共享同一出口 IP（都没配 proxy），
+        // 微软会很容易把它们识别为同源批量作业。启动时一次性提醒。
+        if (this.config.clusters > 1) {
+            const accountsWithoutProxy = this.accounts.filter(a => !a?.proxy?.url)
+            if (accountsWithoutProxy.length >= 2) {
+                this.logger.warn(
+                    'main',
+                    'IP-SHARING',
+                    `⚠️ ${accountsWithoutProxy.length} 个账号共享同一出口 IP（未配置代理）：${accountsWithoutProxy
+                        .map(a => a.email)
+                        .join(', ')}。强烈建议为每个账号配置独立代理，否则会被风控为批量作业。`
+                )
+            }
+        }
+
         // 如果集群数大于1，则使用多进程模式
         if (this.config.clusters > 1) {
             if (cluster.isPrimary) {
@@ -224,9 +239,24 @@ export class MicrosoftRewardsBot {
             const worker = cluster.fork()
             worker.send?.({ chunk, runStartTime })
 
-            worker.on('message', (msg: { __ipcLog?: IpcLog; __stats?: AccountStats[] }) => {
+            worker.on('message', (msg: { __ipcLog?: IpcLog; __ipcAlert?: IpcAlert; __stats?: AccountStats[] }) => {
                 if (msg.__stats) {
                     allAccountStats.push(...msg.__stats)
+                }
+
+                // 紧急告警：绕过 webhookLogFilter，强制发所有启用的 webhook
+                const alert = msg.__ipcAlert
+                if (alert && typeof alert.content === 'string') {
+                    const { webhook } = this.config
+                    if (webhook.discord?.enabled && webhook.discord.url) {
+                        sendDiscord(webhook.discord.url, alert.content, 'error')
+                    }
+                    if (webhook.ntfy?.enabled && webhook.ntfy.url) {
+                        sendNtfy(webhook.ntfy, alert.content, 'error')
+                    }
+                    if (webhook.pushplus?.enabled && webhook.pushplus.token) {
+                        sendPushPlus(webhook.pushplus, alert.content)
+                    }
                 }
 
                 const log = msg.__ipcLog
@@ -441,6 +471,19 @@ export class MicrosoftRewardsBot {
         const accountEmail = account.email
         this.logger.info('main', 'FLOW', `开始为 ${accountEmail} 创建会话`)
 
+        // quietHours：真人凌晨不搜。如果此刻在安静区间里，等到区间结束再开始。
+        const quietWaitMs = this.utils.quietHoursWaitMs(this.config.quietHours)
+        if (quietWaitMs > 0) {
+            const endAt = new Date(Date.now() + quietWaitMs).toLocaleString()
+            this.logger.info(
+                'main',
+                'QUIET-HOURS',
+                `处于安静时段 | ${accountEmail} 将在 ${endAt} 开始（等待 ${Math.round(quietWaitMs / 60000)} 分钟）`,
+                'yellow'
+            )
+            await this.utils.wait(quietWaitMs)
+        }
+
         let mobileSession: BrowserSession | null = null
         let mobileContextClosed = false
 
@@ -453,6 +496,25 @@ export class MicrosoftRewardsBot {
                 this.logger.info('main', 'BROWSER', `移动浏览器已启动 | ${accountEmail}`)
 
                 await this.login.login(this.mainMobilePage, account)
+
+                // 登录后、读 dashboard 前，主动检测 rewards dashboard 上的"账号被暂停"横幅。
+                // 登录流程里的 #serviceAbuseLandingTitle 只能捕获鉴权阶段，已登录但 rewards
+                // 被限制的账号会显示 #suspendedAccountHeader（见 constants.ts#SELECTORS）。
+                try {
+                    const suspended = await this.mainMobilePage
+                        .locator('#suspendedAccountHeader')
+                        .count()
+                        .then(n => n > 0)
+                        .catch(() => false)
+                    if (suspended) {
+                        const msg = `${accountEmail} 的 Rewards 账号被微软暂停，无法继续领积分`
+                        this.logger.alert('main', 'ACCOUNT-SUSPENDED', msg)
+                        throw new Error(msg)
+                    }
+                } catch (e) {
+                    // 只有 suspended=true 分支会 throw；其它异常（locator 查不到等）吞掉
+                    if (e instanceof Error && e.message.includes('暂停')) throw e
+                }
 
                 try {
                     this.accessToken = await this.login.getAppAccessToken(this.mainMobilePage, accountEmail)

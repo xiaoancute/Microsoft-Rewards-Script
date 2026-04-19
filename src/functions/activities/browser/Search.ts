@@ -321,7 +321,7 @@ export class Search extends Workers {
                 await this.bot.browser.utils.ghostClick(searchPage, searchBar, { clickCount: 3 })
                 await searchBox.fill('')
 
-                await searchPage.keyboard.type(query, { delay: 50 })
+                await this.bot.browser.utils.humanType(searchPage, query)
                 await searchPage.keyboard.press('Enter')
 
                 this.bot.logger.debug(
@@ -337,7 +337,13 @@ export class Search extends Workers {
                     await this.randomScroll(searchPage, isMobile)
                 }
 
-                if (this.bot.config.searchSettings.clickRandomResults) {
+                // clickRandomResults 支持两种语义：
+                //   boolean -> 等同 1.0 / 0.0（全点 / 全不点）
+                //   number  -> 本次搜索点击的概率（0-1）
+                // 真人不是每次搜索都点结果，默认 0.6 比 true 更自然
+                const clickCfg = this.bot.config.searchSettings.clickRandomResults as boolean | number
+                const clickProb = typeof clickCfg === 'number' ? clickCfg : (clickCfg ? 1 : 0)
+                if (clickProb > 0 && Math.random() < clickProb) {
                     await this.bot.utils.wait(2000)
                     await this.clickRandomLink(searchPage, isMobile)
                 }
@@ -345,7 +351,8 @@ export class Search extends Workers {
                 await this.bot.utils.wait(
                     this.bot.utils.randomDelay(
                         this.bot.config.searchSettings.searchDelay.min,
-                        this.bot.config.searchSettings.searchDelay.max
+                        this.bot.config.searchSettings.searchDelay.max,
+                        'lognormal'
                     )
                 )
 
@@ -374,13 +381,20 @@ export class Search extends Workers {
                     `搜索尝试失败 | attempt=${i + 1}/${maxAttempts} | query="${query}" | message=${error instanceof Error ? error.message : String(error)}`
                 )
 
+                // 指数退避：base 8s × 2ⁿ，clamp 到 15min，±10% 抖动
+                // 失败率是风控强信号，越连续失败越该拉长等待，避免更快触发封禁
+                const baseMs = 8000
+                const capMs = 15 * 60 * 1000
+                const exp = Math.min(baseMs * Math.pow(2, i), capMs)
+                const jittered = Math.floor(exp * (0.9 + Math.random() * 0.2))
+
                 this.bot.logger.warn(
                     isMobile,
                     'SEARCH-BING',
-                    `重试搜索 | attempt=${i + 1}/${maxAttempts} | query="${query}"`
+                    `重试搜索 | attempt=${i + 1}/${maxAttempts} | query="${query}" | backoff=${Math.round(jittered / 1000)}s`
                 )
 
-                await this.bot.utils.wait(2000)
+                await this.bot.utils.wait(jittered)
             }
         }
 
@@ -396,17 +410,35 @@ export class Search extends Workers {
         try {
             const viewportHeight = await page.evaluate(() => window.innerHeight)
             const totalHeight = await page.evaluate(() => document.body.scrollHeight)
-            const randomScrollPosition = Math.floor(Math.random() * (totalHeight - viewportHeight))
+            const scrollableDistance = Math.max(0, totalHeight - viewportHeight)
+            const targetPosition = Math.floor(Math.random() * scrollableDistance)
 
             this.bot.logger.debug(
                 isMobile,
                 'SEARCH-RANDOM-SCROLL',
-                `随机滚动 | 视口高度=${viewportHeight} | 总高度=${totalHeight} | 滚动位置=${randomScrollPosition}`
+                `分步滚动 | 视口=${viewportHeight} | 总高=${totalHeight} | 目标=${targetPosition}`
             )
 
-            await page.evaluate((scrollPos: number) => {
-                window.scrollTo({ left: 0, top: scrollPos, behavior: 'auto' })
-            }, randomScrollPosition)
+            if (scrollableDistance === 0) return
+
+            // 真人滚动是连续的 wheel 事件流，不是瞬移。分 4-8 步，每步 100-300px，间隔 120-320ms。
+            const steps = this.bot.utils.randomNumber(4, 8)
+            const currentY = await page.evaluate(() => window.scrollY)
+            const remaining = targetPosition - currentY
+
+            for (let i = 0; i < steps; i++) {
+                const progress = (i + 1) / steps
+                const expected = currentY + remaining * progress
+                // 每一步带些随机抖动，避免每次步幅一致
+                const jitter = this.bot.utils.randomNumber(-40, 40)
+                const targetY = Math.floor(expected + jitter)
+                const deltaY = targetY - (await page.evaluate(() => window.scrollY))
+
+                if (Math.abs(deltaY) < 4) continue
+                // mouse.wheel 在真实 user input 流里产生 wheel 事件，和 JS scrollTo 不同源
+                await page.mouse.wheel(0, deltaY)
+                await this.bot.utils.wait(this.bot.utils.randomNumber(120, 320))
+            }
         } catch (error) {
             this.bot.logger.error(
                 isMobile,
@@ -423,7 +455,13 @@ export class Search extends Workers {
             const searchPageUrl = page.url()
 
             await this.bot.browser.utils.ghostClick(page, '#b_results .b_algo h2')
-            await this.bot.utils.wait(this.bot.config.searchSettings.searchResultVisitTime)
+            // searchResultVisitTime 支持单值或 {min,max}；{min,max} 走长尾分布，模拟真人
+            // 多数快速扫读（min 附近）、偶尔认真读（tail 到 max）
+            const vt = this.bot.config.searchSettings.searchResultVisitTime
+            const visitMs = typeof vt === 'object' && vt !== null && 'min' in vt && 'max' in vt
+                ? this.bot.utils.randomDelay(vt.min, vt.max, 'lognormal')
+                : vt
+            await this.bot.utils.wait(visitMs)
 
             if (isMobile) {
                 await page.goto(searchPageUrl)

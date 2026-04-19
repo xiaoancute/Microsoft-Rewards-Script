@@ -2,7 +2,6 @@
     "baseURL": "https://rewards.bing.com",
     "sessionPath": "sessions",
     "headless": false,
-    "runOnZeroPoints": false,
     "clusters": 1,
     "errorDiagnostics": false,
     "workers": {
@@ -18,12 +17,20 @@
     },
     "searchOnBingLocalQueries": false,
     "globalTimeout": "50sec",
+    "quietHours": {
+        "enabled": false,
+        "start": "01:00",
+        "end": "06:00"
+    },
     "searchSettings": {
         "scrollRandomResults": true,
-        "clickRandomResults": true,
+        "clickRandomResults": 0.6,
         "parallelSearching": false,
         "queryEngines": ["china", "local"],
-        "searchResultVisitTime": "20sec",
+        "searchResultVisitTime": {
+            "min": "8sec",
+            "max": "45sec"
+        },
         "searchDelay": {
             "min": "5min",
             "max": "9min"

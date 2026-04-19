@@ -75,10 +75,10 @@ export const ConfigSchema = z.object({
     globalTimeout: NumberOrString,
     searchSettings: z.object({
         scrollRandomResults: z.boolean(),
-        clickRandomResults: z.boolean(),
+        clickRandomResults: z.union([z.boolean(), z.number().min(0).max(1)]),
         parallelSearching: z.boolean(),
         queryEngines: z.array(QueryEngineSchema),
-        searchResultVisitTime: NumberOrString,
+        searchResultVisitTime: z.union([NumberOrString, DelaySchema]),
         searchDelay: DelaySchema,
         readDelay: DelaySchema
     }),
@@ -87,7 +87,14 @@ export const ConfigSchema = z.object({
         queryEngine: z.boolean()
     }),
     consoleLogFilter: LogFilterSchema,
-    webhook: WebhookSchema
+    webhook: WebhookSchema,
+    quietHours: z
+        .object({
+            enabled: z.boolean(),
+            start: z.string().regex(/^\d{1,2}:\d{2}$/, '需要 HH:MM 格式'),
+            end: z.string().regex(/^\d{1,2}:\d{2}$/, '需要 HH:MM 格式')
+        })
+        .optional()
 })
 
 // Account
