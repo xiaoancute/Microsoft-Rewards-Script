@@ -335,6 +335,7 @@ function openAccountDialog(account) {
         accountForm.recoveryEmail.value = account.recoveryEmail || ''
         accountForm.geoLocale.value = account.geoLocale || 'auto'
         accountForm.langCode.value = account.langCode || 'zh'
+        accountForm.queryEngines.value = (account.queryEngines || []).join(',')
         accountForm['proxy.url'].value = account.proxy?.url || ''
         accountForm['proxy.port'].value = account.proxy?.port || 0
         accountForm['proxy.username'].value = account.proxy?.username || ''
@@ -356,6 +357,11 @@ document.getElementById('account-cancel').addEventListener('click', () => dialog
 accountForm.addEventListener('submit', async event => {
     event.preventDefault()
     const fd = new FormData(accountForm)
+    const queryEnginesRaw = (fd.get('queryEngines') || '').toString().trim()
+    // 空输入 → 空数组（明确表示"用 config 默认"，覆盖之前可能存在的账号级设定）
+    const queryEnginesList = queryEnginesRaw
+        ? queryEnginesRaw.split(',').map(s => s.trim()).filter(Boolean)
+        : []
     const payload = {
         email: fd.get('email'),
         password: fd.get('password') || undefined,
@@ -363,6 +369,7 @@ accountForm.addEventListener('submit', async event => {
         recoveryEmail: fd.get('recoveryEmail') || undefined,
         geoLocale: fd.get('geoLocale') || 'auto',
         langCode: fd.get('langCode') || 'zh',
+        queryEngines: queryEnginesList,
         proxy: {
             url: fd.get('proxy.url') || '',
             port: Number(fd.get('proxy.port')) || 0,
@@ -539,6 +546,11 @@ function renderConfig() {
             '点击结果的概率（0=不点，1=每次都点）'
         ),
         checkboxField('searchSettings.parallelSearching', cfg.searchSettings?.parallelSearching, '并行桌面/移动搜索'),
+        checkboxField(
+            'searchSettings.queryMutation',
+            cfg.searchSettings?.queryMutation ?? true,
+            '查询词变体（~18% 概率给词尾加后缀，打散跨账号重合）'
+        ),
         textField('searchSettings.queryEngines', (cfg.searchSettings?.queryEngines || []).join(','), '热搜来源（逗号分隔: china,google,wikipedia,reddit,local）'),
         textField(
             'searchSettings.searchResultVisitTime.min',

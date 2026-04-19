@@ -36,6 +36,11 @@ export interface ConfigSearchSettings {
     searchResultVisitTime: number | string | ConfigDelay
     searchDelay: ConfigDelay
     readDelay: ConfigDelay
+    /**
+     * 查询词变体：从 queryEngine 返回的词以小概率附加后缀（"新闻"/"最近"/"怎么样" 等），
+     * 让跨账号即使词源重合也会呈现不同形态。默认 true。
+     */
+    queryMutation?: boolean
 }
 
 export interface ConfigDelay {

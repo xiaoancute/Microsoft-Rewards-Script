@@ -367,7 +367,11 @@ export class MicrosoftRewardsBot {
     private async runTasks(accounts: Account[], runStartTime: number): Promise<AccountStats[]> {
         const accountStats: AccountStats[] = []
 
-        for (const account of accounts) {
+        // 打乱账号顺序：避免每次都按 accounts.json 固定顺序跑, 让多账号的首次搜索
+        // 时间在微软风控里不再有稳定"账号 A 永远先于账号 B"的特征
+        const shuffled = this.utils.shuffleArray([...accounts])
+
+        for (const account of shuffled) {
             const accountStartTime = Date.now()
             const accountEmail = account.email
             this.userData.userName = this.utils.getEmailUsername(accountEmail)

@@ -125,6 +125,12 @@ export class QueryCore {
 
             this.bot.logger.debug(this.bot.isMobile, 'QUERY-MANAGER', `最终查询: ${finalQueries.length}`)
 
+            // 查询词变体：小概率给词尾加后缀，打散跨账号相同热搜词的分布
+            // 例如同一个"某明星"在账号 A 变成"某明星 新闻"、在账号 B 变成"某明星 怎么样"
+            if (this.bot.config.searchSettings.queryMutation !== false) {
+                finalQueries = this.mutateQueries(finalQueries)
+            }
+
             return finalQueries
         } catch (error) {
             this.bot.logger.debug(
@@ -134,6 +140,20 @@ export class QueryCore {
             )
             return []
         }
+    }
+
+    /**
+     * 查询词后缀变体池：中文常见修饰词。~18% 概率给词附加一个后缀。
+     * 用户可以通过 config.searchSettings.queryMutation: false 关掉整个行为。
+     */
+    private mutateQueries(queries: string[]): string[] {
+        const suffixes = ['新闻', '最近', '怎么样', '介绍', '百度百科', '知乎', '攻略', '2025', '是什么', '简介']
+        return queries.map(q => {
+            if (!q) return q
+            if (Math.random() >= 0.18) return q
+            const suffix = suffixes[Math.floor(Math.random() * suffixes.length)]
+            return suffix ? `${q} ${suffix}` : q
+        })
     }
 
     private async buildRelatedClusters(baseTopics: string[], langCode: string): Promise<string[][]> {

@@ -25,6 +25,7 @@
         "recoveryEmail": "",
         "geoLocale": "auto",
         "langCode": "zh",
+        "queryEngines": ["reddit", "wikipedia", "local"],
         "proxy": {
             "proxyAxios": false,
             "url": "",

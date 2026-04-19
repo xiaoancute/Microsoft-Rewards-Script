@@ -300,6 +300,10 @@
                 <label>地区 <input type="text" name="geoLocale" value="auto" /></label>
                 <label>语言 <input type="text" name="langCode" value="zh" /></label>
             </div>
+            <label>搜索词源（可选，逗号分隔；留空走 config 默认）
+                <input type="text" name="queryEngines" placeholder="china,local  或  reddit,wikipedia,local" />
+            </label>
+            <p class="field-hint">多账号时建议不同账号设不同词源，避免跨账号搜索词分布重合被批量风控</p>
             <fieldset>
                 <legend>代理 (可选)</legend>
                 <label>URL <input type="text" name="proxy.url" placeholder="http://host" /></label>

@@ -80,7 +80,8 @@ export const ConfigSchema = z.object({
         queryEngines: z.array(QueryEngineSchema),
         searchResultVisitTime: z.union([NumberOrString, DelaySchema]),
         searchDelay: DelaySchema,
-        readDelay: DelaySchema
+        readDelay: DelaySchema,
+        queryMutation: z.boolean().optional()
     }),
     debugLogs: z.boolean(),
     proxy: z.object({
@@ -115,7 +116,8 @@ export const AccountSchema = z.object({
     saveFingerprint: z.object({
         mobile: z.boolean(),
         desktop: z.boolean()
-    })
+    }),
+    queryEngines: z.array(QueryEngineSchema).optional()
 })
 
 export function validateConfig(data: unknown): Config {

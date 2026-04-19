@@ -4,6 +4,8 @@ import type { Counters, DashboardData } from '../../../interface/DashboardData'
 
 import { QueryCore } from '../../QueryEngine'
 import { Workers } from '../../Workers'
+import { getCurrentContext } from '../../../index'
+import type { QueryEngine } from '../../../interface/Config'
 
 /**
  * 必应搜索类，负责执行必应搜索以获取积分
@@ -18,6 +20,18 @@ export class Search extends Workers {
     private searchCount = 0
     /** 首次滚动标志 */
     private firstScroll: boolean = true;
+
+    /**
+     * 决定本次搜索使用的 queryEngines。账号级配置优先，否则回退 config 默认。
+     * 作用：多账号可以在 accounts.json 里给每个账号设不同词源（A 用 china,local，
+     * B 用 reddit,wikipedia），让跨账号搜索词分布不重合，避免微软把一批账号识别为
+     * "同一时段搜同一批词"的批量作业。
+     */
+    private resolveQueryEngines(): QueryEngine[] {
+        const perAccount = getCurrentContext().account?.queryEngines
+        if (perAccount && perAccount.length > 0) return perAccount
+        return this.bot.config.searchSettings.queryEngines
+    }
 
     public async doSearch(data: DashboardData, page: Page, isMobile: boolean): Promise<number> {
         const startBalance = Number(this.bot.userData.currentPoints ?? 0)
@@ -60,7 +74,7 @@ export class Search extends Workers {
                 langCode,
                 geoLocale: locale,
                 // sourceOrder: ['google', 'wikipedia', 'reddit', 'local']
-                sourceOrder: ['china','local']
+                sourceOrder: this.resolveQueryEngines()
             })
 
             queries = [...new Set(queries.map(q => q.trim()).filter(Boolean))]
@@ -147,7 +161,7 @@ export class Search extends Workers {
                         related: true,
                         langCode,
                         geoLocale: locale,
-                        sourceOrder: this.bot.config.searchSettings.queryEngines
+                        sourceOrder: this.resolveQueryEngines()
                     })
 
                     const merged = [...queries, ...extra].map(q => q.trim()).filter(Boolean)
@@ -174,7 +188,7 @@ export class Search extends Workers {
                         related: true,
                         langCode,
                         geoLocale: locale,
-                        sourceOrder: this.bot.config.searchSettings.queryEngines
+                        sourceOrder: this.resolveQueryEngines()
                     })
 
                     const merged = [...queries, ...extra].map(q => q.trim()).filter(Boolean)
