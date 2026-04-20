@@ -10,6 +10,7 @@ import type { XboxDashboardData } from '../interface/XboxDashboardData'
 import type { AppEarnablePoints, BrowserEarnablePoints, MissingSearchPoints } from '../interface/Points'
 import type { AppDashboardData } from '../interface/AppDashBoardData'
 import { PanelFlyoutData } from '../interface/PanelFlyoutData'
+import { adaptModernDashboardData } from './modernDashboardAdapter'
 
 export default class BrowserFunc {
     private bot: MicrosoftRewardsBot
@@ -23,6 +24,45 @@ export default class BrowserFunc {
      * @returns {DashboardData} 用户必应奖励仪表板数据对象
      */
     async getDashboardData(): Promise<DashboardData> {
+        if (this.bot.rewardsVersion === 'modern') {
+            return await this.getModernDashboardData()
+        }
+
+        return await this.getLegacyDashboardData()
+    }
+
+    private async getModernDashboardData(): Promise<DashboardData> {
+        try {
+            const panelData = await this.getPanelFlyoutData()
+            this.bot.panelData = panelData
+
+            let legacySupplement: DashboardData | null = null
+
+            try {
+                legacySupplement = await this.getLegacyDashboardData()
+            } catch (legacyError) {
+                this.bot.logger.warn(
+                    this.bot.isMobile,
+                    'GET-DASHBOARD-DATA',
+                    `旧版 dashboard 补充数据不可用，继续使用现代适配数据: ${
+                        legacyError instanceof Error ? legacyError.message : String(legacyError)
+                    }`
+                )
+            }
+
+            return adaptModernDashboardData(panelData, legacySupplement, this.bot.userData.geoLocale)
+        } catch (error) {
+            this.bot.logger.warn(
+                this.bot.isMobile,
+                'GET-DASHBOARD-DATA',
+                `现代面板获取失败，回退旧版 dashboard: ${error instanceof Error ? error.message : String(error)}`
+            )
+
+            return await this.getLegacyDashboardData()
+        }
+    }
+
+    private async getLegacyDashboardData(): Promise<DashboardData> {
         try {
             const request: AxiosRequestConfig = {
                 url: 'https://rewards.bing.com/api/getuserinfo?type=1',
@@ -77,11 +117,11 @@ export default class BrowserFunc {
         }
     }
 
-  /**
+    /**
      * Fetch user panel flyout data
      * @returns {PanelFlyoutData} Object of user bing rewards dashboard data
      */
-    async getPanelFlyoutData(): Promise<PanelFlyoutData> {  
+    async getPanelFlyoutData(): Promise<PanelFlyoutData> {
         try {
             const request: AxiosRequestConfig = {
                 url: 'https://cn.bing.com/rewards/panelflyout/getuserinfo?channel=BingFlyout&partnerId=BingRewards',

@@ -535,7 +535,9 @@ export class MicrosoftRewardsBot {
 
                 const data: DashboardData = await this.browser.func.getDashboardData()
                 const appData: AppDashboardData = await this.browser.func.getAppDashboardData()
-                this.panelData = await this.browser.func.getPanelFlyoutData()
+                if (this.rewardsVersion !== 'modern' || !this.panelData) {
+                    this.panelData = await this.browser.func.getPanelFlyoutData()
+                }
                 // 设置地理位置
                 this.userData.geoLocale =
                     account.geoLocale === 'auto' ? data.userProfile.attributes.country : account.geoLocale.toLowerCase()
