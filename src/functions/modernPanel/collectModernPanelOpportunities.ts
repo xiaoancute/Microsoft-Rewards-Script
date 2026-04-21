@@ -2,6 +2,7 @@ import type { DashboardData } from '../../interface/DashboardData'
 import type { PanelFlyoutData } from '../../interface/PanelFlyoutData'
 import {
     ModernOpportunityDecision,
+    ModernOpportunityFieldState,
     ModernOpportunityKind,
     ModernOpportunityReason,
     ModernOpportunitySource,
@@ -25,22 +26,61 @@ interface PromotionLike {
     complete?: unknown
 }
 
-function normalizeString(value: unknown): null | string {
+interface NormalizedStringField {
+    value: null | string
+    state: ModernOpportunityFieldState
+}
+
+function normalizeStringField(
+    value: unknown,
+    normalizeValue?: (rawValue: string) => string
+): NormalizedStringField {
+    if (value === null || typeof value === 'undefined') {
+        return {
+            value: null,
+            state: ModernOpportunityFieldState.Missing
+        }
+    }
+
     if (typeof value !== 'string') {
-        return null
+        return {
+            value: null,
+            state: ModernOpportunityFieldState.InvalidType
+        }
     }
 
     const trimmed = value.trim()
-    return trimmed.length ? trimmed : null
+    if (!trimmed.length) {
+        return {
+            value: null,
+            state: ModernOpportunityFieldState.Blank
+        }
+    }
+
+    return {
+        value: normalizeValue ? normalizeValue(trimmed) : trimmed,
+        state: ModernOpportunityFieldState.Normalized
+    }
+}
+
+function normalizeString(value: unknown): null | string {
+    return normalizeStringField(value).value
+}
+
+function getOfferIdField(promotion: PromotionLike): NormalizedStringField {
+    return normalizeStringField(promotion.offerId)
 }
 
 function getOfferId(promotion: PromotionLike): null | string {
-    return normalizeString(promotion.offerId)
+    return getOfferIdField(promotion).value
+}
+
+function getPromotionTypeField(promotion: PromotionLike): NormalizedStringField {
+    return normalizeStringField(promotion.promotionType, value => value.toLowerCase())
 }
 
 function getPromotionType(promotion: PromotionLike): null | string {
-    const promotionType = normalizeString(promotion.promotionType)
-    return promotionType ? promotionType.toLowerCase() : null
+    return getPromotionTypeField(promotion).value
 }
 
 function getDestinationUrl(promotion: PromotionLike): null | string {
@@ -74,10 +114,18 @@ function isPollPromotion(promotion: PromotionLike): boolean {
     return getPromotionType(promotion) === 'quiz' && hasPollScenarioDestination(promotion)
 }
 
+function isEightQuestionQuizPromotion(promotion: PromotionLike): boolean {
+    return getPromotionType(promotion) === 'quiz' && (getNumeric(promotion.activityProgressMax) ?? 0) === 80
+}
+
 function hasPositiveActionability(promotion: PromotionLike): boolean {
     const pointProgressMax = getNumeric(promotion.pointProgressMax) ?? 0
     const activityProgressMax = getNumeric(promotion.activityProgressMax) ?? 0
     return pointProgressMax > 0 || activityProgressMax > 0
+}
+
+function hasValidDestination(promotion: PromotionLike): boolean {
+    return !!getDestinationUrl(promotion)
 }
 
 function hasExecutionContractFields(promotion: PromotionLike): boolean {
@@ -105,6 +153,18 @@ function isLockedPromotion(promotion: PromotionLike): boolean {
 
     const normalizedStatus = status.toLowerCase()
     return normalizedStatus === 'locked' || normalizedStatus === 'notsupported'
+}
+
+function getLockedStatus(promotion: PromotionLike): null | string {
+    return normalizeStringField(promotion.exclusiveLockedFeatureStatus, value => value.toLowerCase()).value
+}
+
+function isBlankOfferIdField(field: NormalizedStringField): boolean {
+    return (
+        field.state === ModernOpportunityFieldState.Blank ||
+        field.state === ModernOpportunityFieldState.Missing ||
+        field.state === ModernOpportunityFieldState.InvalidType
+    )
 }
 
 function isInfoCardWithoutAction(promotion: PromotionLike): boolean {
@@ -140,7 +200,8 @@ function inferKind(source: ModernOpportunitySource, promotion: PromotionLike): M
 
 function classifyOpportunity(
     source: ModernOpportunitySource,
-    promotion: PromotionLike
+    promotion: PromotionLike,
+    offerIdField: NormalizedStringField
 ): Pick<ModernPanelOpportunity, 'decision' | 'reason'> {
     if (source === ModernOpportunitySource.Daily) {
         return {
@@ -170,8 +231,34 @@ function classifyOpportunity(
         }
     }
 
-    const autoQuizOrPoll = (isPollPromotion(promotion) || isQuizPromotion(promotion)) && hasPositiveActionability(promotion)
-    const autoUrlReward = isValidUrlRewardPromotion(promotion) && hasPositiveActionability(promotion)
+    const blankOfferId = isBlankOfferIdField(offerIdField)
+    const positiveActionability = hasPositiveActionability(promotion)
+
+    if (blankOfferId && positiveActionability) {
+        if (isPollPromotion(promotion)) {
+            return {
+                decision: ModernOpportunityDecision.Auto,
+                reason: ModernOpportunityReason.AutoExecutableWithoutOfferId
+            }
+        }
+
+        if (isEightQuestionQuizPromotion(promotion) && hasValidDestination(promotion)) {
+            return {
+                decision: ModernOpportunityDecision.Auto,
+                reason: ModernOpportunityReason.AutoExecutableWithoutOfferId
+            }
+        }
+
+        if (isQuizPromotion(promotion) || getPromotionType(promotion) === 'urlreward') {
+            return {
+                decision: ModernOpportunityDecision.Skip,
+                reason: ModernOpportunityReason.MissingOfferIdRequiresApiExecution
+            }
+        }
+    }
+
+    const autoQuizOrPoll = (isPollPromotion(promotion) || isQuizPromotion(promotion)) && positiveActionability
+    const autoUrlReward = isValidUrlRewardPromotion(promotion) && positiveActionability
 
     if (autoQuizOrPoll || autoUrlReward) {
         return {
@@ -184,6 +271,33 @@ function classifyOpportunity(
         decision: ModernOpportunityDecision.Skip,
         reason: ModernOpportunityReason.UnsupportedPromotionType
     }
+}
+
+function keyPart(value: null | string): string {
+    return value ? value.trim().toLowerCase() : 'unknown'
+}
+
+function buildOpportunityKey(
+    source: ModernOpportunitySource,
+    kind: ModernOpportunityKind,
+    offerId: null | string,
+    promotionType: null | string,
+    destinationUrl: null | string,
+    title: null | string,
+    lockedStatus: null | string
+): string {
+    if (offerId) {
+        return `offer:${offerId.trim().toLowerCase()}`
+    }
+
+    return [
+        source,
+        kind,
+        keyPart(promotionType),
+        keyPart(destinationUrl),
+        keyPart(title),
+        keyPart(lockedStatus)
+    ].join('|')
 }
 
 function collectLegacyOfferIds(legacyData: LegacyOfferSources | null | undefined): Set<string> {
@@ -218,6 +332,29 @@ function collectLegacyOfferIds(legacyData: LegacyOfferSources | null | undefined
     return offerIds
 }
 
+function preferOpportunity(left: ModernPanelOpportunity, right: ModernPanelOpportunity): ModernPanelOpportunity {
+    if (left.decision !== right.decision) {
+        return left.decision === ModernOpportunityDecision.Auto ? left : right
+    }
+
+    if (left.kind !== right.kind) {
+        return left.kind !== ModernOpportunityKind.InfoOnly ? left : right
+    }
+
+    return left
+}
+
+function dedupeOpportunities(opportunities: ModernPanelOpportunity[]): ModernPanelOpportunity[] {
+    const seen = new Map<string, ModernPanelOpportunity>()
+
+    for (const opportunity of opportunities) {
+        const current = seen.get(opportunity.opportunityKey)
+        seen.set(opportunity.opportunityKey, current ? preferOpportunity(current, opportunity) : opportunity)
+    }
+
+    return [...seen.values()]
+}
+
 function toOpportunity(
     source: ModernOpportunitySource,
     promotion: PromotionLike | null | undefined,
@@ -227,10 +364,15 @@ function toOpportunity(
         return null
     }
 
-    const offerId = getOfferId(promotion)
+    const offerIdField = getOfferIdField(promotion)
+    const promotionTypeField = getPromotionTypeField(promotion)
+    const offerId = offerIdField.value
     const kind = inferKind(source, promotion)
-    const initialClassification = classifyOpportunity(source, promotion)
+    const initialClassification = classifyOpportunity(source, promotion, offerIdField)
     const duplicateWithLegacyWorker = !!offerId && legacyOfferIds.has(offerId)
+    const destinationUrl = getDestinationUrl(promotion)
+    const title = normalizeString(promotion.title)
+    const lockedStatus = getLockedStatus(promotion)
 
     return {
         source,
@@ -238,9 +380,20 @@ function toOpportunity(
         decision: duplicateWithLegacyWorker ? ModernOpportunityDecision.Skip : initialClassification.decision,
         reason: duplicateWithLegacyWorker ? ModernOpportunityReason.DuplicateWithLegacyWorker : initialClassification.reason,
         offerId,
-        promotionType: getPromotionType(promotion),
-        destinationUrl: getDestinationUrl(promotion),
-        title: normalizeString(promotion.title),
+        offerIdState: offerIdField.state,
+        opportunityKey: buildOpportunityKey(
+            source,
+            kind,
+            offerId,
+            promotionTypeField.value,
+            destinationUrl,
+            title,
+            lockedStatus
+        ),
+        promotionType: promotionTypeField.value,
+        promotionTypeState: promotionTypeField.state,
+        destinationUrl,
+        title,
         promotion
     }
 }
@@ -260,7 +413,7 @@ export function collectModernPanelOpportunities(
         ),
         toOpportunity(ModernOpportunitySource.Level, panelData?.flyoutResult?.levelInfoPromotion, legacyOfferIds),
         toOpportunity(ModernOpportunitySource.Level, panelData?.flyoutResult?.levelBenefitsPromotion, legacyOfferIds)
-    ]
+    ].filter((item): item is ModernPanelOpportunity => item !== null)
 
-    return candidates.filter((item): item is ModernPanelOpportunity => item !== null)
+    return dedupeOpportunities(candidates)
 }
