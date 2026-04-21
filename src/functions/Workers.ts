@@ -8,6 +8,9 @@ import type {
     PurplePromotionalItem
 } from '../interface/DashboardData'
 import type { AppDashboardData } from '../interface/AppDashBoardData'
+import type { PanelFlyoutData } from '../interface/PanelFlyoutData'
+import { collectModernPanelOpportunities } from './modernPanel/collectModernPanelOpportunities'
+import { executeModernPanelOpportunities } from './modernPanel/executeModernPanelOpportunities'
 
 export class Workers {
     public bot: MicrosoftRewardsBot
@@ -172,6 +175,21 @@ export class Workers {
         }
 
         this.bot.logger.info(this.bot.isMobile, 'SPECIAL-ACTIVITY', '所有"特殊活动"项目已完成')
+    }
+
+    public async doModernPanelPromotions(panelData: PanelFlyoutData, data: DashboardData, page: Page) {
+        const opportunities = collectModernPanelOpportunities(panelData, data)
+
+        if (!opportunities.length) {
+            this.bot.logger.info(
+                this.bot.isMobile,
+                'MODERN-PANEL',
+                '未收集到可执行的现代面板活动，跳过处理'
+            )
+            return
+        }
+
+        await executeModernPanelOpportunities(this.bot, opportunities, page)
     }
 
     public async doPunchCards(data: DashboardData, page: Page) {
