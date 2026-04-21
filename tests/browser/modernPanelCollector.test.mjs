@@ -150,7 +150,7 @@ test('collectModernPanelOpportunities includes streakBonusPromotions and classif
     const unsupported = opportunities.find((item) => item.offerId === 'streak-bonus-unsupported-1')
     assert.ok(unsupported)
     assert.equal(unsupported.source, 'streak')
-    assert.equal(unsupported.kind, 'quiz')
+    assert.equal(unsupported.kind, 'info-only')
     assert.equal(unsupported.decision, 'skip')
     assert.equal(unsupported.reason, 'unsupported-promotion-type')
 })
@@ -223,4 +223,47 @@ test('collectModernPanelOpportunities skips zero-point quiz and poll entries', a
     assert.equal(pollZero.kind, 'poll')
     assert.equal(pollZero.decision, 'skip')
     assert.equal(pollZero.reason, 'unsupported-promotion-type')
+})
+
+test('collectModernPanelOpportunities skips completed modern promotions', async () => {
+    const { collectModernPanelOpportunities } = await loadCollector()
+
+    const panelData = {
+        flyoutResult: {
+            streakPromotion: makePromotion({
+                offerId: 'completed-poll-1',
+                promotionType: 'quiz',
+                destinationUrl: 'https://rewards.bing.com/task?pollScenarioId=7',
+                pointProgressMax: 10,
+                activityProgressMax: 10,
+                complete: true
+            }),
+            levelBenefitsPromotion: makePromotion({
+                offerId: 'completed-urlreward-1',
+                promotionType: 'urlreward',
+                destinationUrl: 'https://rewards.bing.com/offer',
+                pointProgressMax: 10,
+                activityProgressMax: 10,
+                complete: true
+            })
+        }
+    }
+
+    const opportunities = collectModernPanelOpportunities(panelData, {
+        morePromotions: [],
+        dailySetPromotions: {},
+        morePromotionsWithoutPromotionalItems: []
+    })
+
+    const completedPoll = opportunities.find((item) => item.offerId === 'completed-poll-1')
+    assert.ok(completedPoll)
+    assert.equal(completedPoll.kind, 'poll')
+    assert.equal(completedPoll.decision, 'skip')
+    assert.equal(completedPoll.reason, 'unsupported-promotion-type')
+
+    const completedUrlreward = opportunities.find((item) => item.offerId === 'completed-urlreward-1')
+    assert.ok(completedUrlreward)
+    assert.equal(completedUrlreward.kind, 'urlreward')
+    assert.equal(completedUrlreward.decision, 'skip')
+    assert.equal(completedUrlreward.reason, 'unsupported-promotion-type')
 })

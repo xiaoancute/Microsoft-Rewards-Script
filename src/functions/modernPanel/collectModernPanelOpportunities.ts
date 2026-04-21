@@ -22,6 +22,7 @@ interface PromotionLike {
     exclusiveLockedFeatureStatus?: unknown
     hash?: unknown
     activityType?: unknown
+    complete?: unknown
 }
 
 function normalizeString(value: unknown): null | string {
@@ -48,6 +49,20 @@ function getDestinationUrl(promotion: PromotionLike): null | string {
 
 function getNumeric(value: unknown): null | number {
     return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function getComplete(promotion: PromotionLike): boolean {
+    if (typeof promotion.complete === 'boolean') {
+        return promotion.complete
+    }
+
+    const normalized = normalizeString(promotion.complete)
+    if (!normalized) {
+        return false
+    }
+
+    const lower = normalized.toLowerCase()
+    return lower === 'true' || lower === 'complete' || lower === '1'
 }
 
 function hasPollScenarioDestination(promotion: PromotionLike): boolean {
@@ -120,15 +135,7 @@ function inferKind(source: ModernOpportunitySource, promotion: PromotionLike): M
         return ModernOpportunityKind.Quiz
     }
 
-    if (source === ModernOpportunitySource.Streak) {
-        return ModernOpportunityKind.Quiz
-    }
-
-    if (source === ModernOpportunitySource.Level) {
-        return ModernOpportunityKind.UrlReward
-    }
-
-    return ModernOpportunityKind.CheckIn
+    return ModernOpportunityKind.InfoOnly
 }
 
 function classifyOpportunity(
@@ -146,6 +153,13 @@ function classifyOpportunity(
         return {
             decision: ModernOpportunityDecision.Skip,
             reason: ModernOpportunityReason.InfoCardWithoutAction
+        }
+    }
+
+    if (getComplete(promotion)) {
+        return {
+            decision: ModernOpportunityDecision.Skip,
+            reason: ModernOpportunityReason.UnsupportedPromotionType
         }
     }
 
