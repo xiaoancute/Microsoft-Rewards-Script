@@ -13,6 +13,7 @@ const QUIZ_OPTION_SELECTORS = [
 const QUIZ_MAX_QUESTION_ATTEMPTS = 8
 const QUIZ_MAX_CLICK_ATTEMPTS = 3
 const QUIZ_CONFIRMATION_READS_PER_CLICK = 2
+const QUIZ_PROGRESS_MARKER_SELECTORS = ['[data-quiz-question-id]', '.quizQuestion', '.rqQuestion', 'h1', 'h2']
 
 export class Quiz extends Workers {
     private cookieHeader: string = ''
@@ -187,53 +188,65 @@ export class Quiz extends Workers {
         const offerId = promotion.offerId
         let balance = Number(startBalance ?? this.bot.userData.currentPoints ?? 0)
         let answered = 0
+        let candidateStartIndex = 0
 
         const currentUrl = typeof page.url === 'function' ? page.url() : ''
         if (promotion.destinationUrl && currentUrl !== promotion.destinationUrl) {
-            await page.goto(promotion.destinationUrl).catch(() => {})
+            await page.goto(promotion.destinationUrl).catch((error) => {
+                this.bot.logger.warn(
+                    this.bot.isMobile,
+                    'QUIZ',
+                    `8题测验跳转失败 | offerId=${offerId} | url=${promotion.destinationUrl} | 消息=${error instanceof Error ? error.message : String(error)}`
+                )
+            })
         }
 
         for (let questionIndex = 0; questionIndex < QUIZ_MAX_QUESTION_ATTEMPTS; questionIndex++) {
+            let progressed = false
             let clicked = false
+            const signatureBeforeClick = await this.captureQuizSignature(page)
 
-            for (const selector of QUIZ_OPTION_SELECTORS) {
-                const options = page.locator(selector)
-                const count = await options.count().catch(() => 0)
-                if (!count) continue
+            for (let clickAttempt = 0; clickAttempt < QUIZ_MAX_CLICK_ATTEMPTS && !progressed; clickAttempt++) {
+                const clickResult = await this.clickQuizCandidate(page, candidateStartIndex)
+                candidateStartIndex = clickResult.nextCandidateStartIndex
+                if (!clickResult.clicked) break
+                clicked = true
 
-                for (let clickAttempt = 0; clickAttempt < QUIZ_MAX_CLICK_ATTEMPTS; clickAttempt++) {
-                    clicked = await options
-                        .first()
-                        .click({ timeout: 3000 })
-                        .then(() => true)
-                        .catch(() => false)
+                for (let readAttempt = 0; readAttempt < QUIZ_CONFIRMATION_READS_PER_CLICK; readAttempt++) {
+                    await this.bot.utils.wait(this.bot.utils.randomDelay(1500, 3000))
 
-                    if (clicked) break
+                    const newBalance = Number(await this.bot.browser.func.getCurrentPoints().catch(() => balance) ?? balance)
+                    const gained = Math.max(0, newBalance - balance)
+                    const signatureAfterClick = await this.captureQuizSignature(page)
+                    const signatureChanged =
+                        Boolean(signatureBeforeClick) || Boolean(signatureAfterClick)
+                            ? signatureAfterClick !== signatureBeforeClick
+                            : false
+
+                    if (gained > 0) {
+                        this.bot.userData.currentPoints = newBalance
+                        this.bot.userData.gainedPoints = (this.bot.userData.gainedPoints ?? 0) + gained
+                        this.gainedPoints += gained
+                        balance = newBalance
+                    }
+
+                    if (gained > 0 || signatureChanged) {
+                        progressed = true
+                        break
+                    }
                 }
-
-                if (clicked) break
             }
 
-            if (!clicked) {
+            if (!clicked || !progressed) {
+                this.bot.logger.warn(
+                    this.bot.isMobile,
+                    'QUIZ',
+                    `8题测验未确认进度，提前结束 | offerId=${offerId} | 题序=${questionIndex + 1}`
+                )
                 break
             }
 
             answered++
-
-            for (let readAttempt = 0; readAttempt < QUIZ_CONFIRMATION_READS_PER_CLICK; readAttempt++) {
-                await this.bot.utils.wait(this.bot.utils.randomDelay(1500, 3000))
-
-                const newBalance = Number(await this.bot.browser.func.getCurrentPoints().catch(() => balance) ?? balance)
-                const gained = Math.max(0, newBalance - balance)
-
-                if (gained > 0) {
-                    this.bot.userData.currentPoints = newBalance
-                    this.bot.userData.gainedPoints = (this.bot.userData.gainedPoints ?? 0) + gained
-                    this.gainedPoints += gained
-                    balance = newBalance
-                    break
-                }
-            }
         }
 
         this.bot.logger.info(
@@ -241,5 +254,70 @@ export class Quiz extends Workers {
             'QUIZ',
             `8题测验执行结束 | offerId=${offerId} | 点击题目数=${answered} | 当前积分=${this.bot.userData.currentPoints}`
         )
+    }
+
+    private async clickQuizCandidate(
+        page: Page,
+        startCandidateIndex: number
+    ): Promise<{ clicked: boolean; nextCandidateStartIndex: number }> {
+        for (const selector of QUIZ_OPTION_SELECTORS) {
+            const options = page.locator(selector)
+            const count = await options.count().catch(() => 0)
+            if (!count) continue
+
+            for (let step = 0; step < count; step++) {
+                const candidateIndex = (startCandidateIndex + step) % count
+                const candidate = options.nth(candidateIndex) as unknown as {
+                    click: (options?: { timeout?: number }) => Promise<void>
+                    isVisible?: () => Promise<boolean>
+                    isEnabled?: () => Promise<boolean>
+                }
+
+                const visible =
+                    typeof candidate.isVisible === 'function'
+                        ? await candidate.isVisible().catch(() => false)
+                        : true
+                if (!visible) continue
+
+                const enabled =
+                    typeof candidate.isEnabled === 'function'
+                        ? await candidate.isEnabled().catch(() => false)
+                        : true
+                if (!enabled) continue
+
+                const clicked = await candidate
+                    .click({ timeout: 3000 })
+                    .then(() => true)
+                    .catch(() => false)
+                if (!clicked) continue
+
+                return {
+                    clicked: true,
+                    nextCandidateStartIndex: candidateIndex + 1
+                }
+            }
+        }
+
+        return {
+            clicked: false,
+            nextCandidateStartIndex: startCandidateIndex
+        }
+    }
+
+    private async captureQuizSignature(page: Page): Promise<string> {
+        for (const selector of QUIZ_PROGRESS_MARKER_SELECTORS) {
+            const marker = page.locator(selector)
+            const count = await marker.count().catch(() => 0)
+            if (!count) continue
+
+            const text = await marker
+                .first()
+                .innerText()
+                .then((value: string) => value.trim())
+                .catch(() => '')
+            if (text) return `${selector}:${text.slice(0, 120)}`
+        }
+
+        return ''
     }
 }

@@ -83,6 +83,105 @@ test('Quiz.doQuiz uses browser flow for 8-question quizzes', async () => {
     assert.equal(bot.userData.currentPoints, 110)
 })
 
+test('Quiz.doQuiz runs real 8-question helper with navigation and resilient candidate progression', async () => {
+    const Quiz = await loadQuiz()
+    const bot = createQuizBot()
+    bot.browser.func.getCurrentPoints = async () => 100
+    const quiz = new Quiz(bot)
+    const clickOrder = []
+    const navigations = []
+    const state = {
+        currentUrl: 'https://rewards.bing.com/dashboard',
+        questionIndex: 0
+    }
+
+    function makeLocator(selector) {
+        if (selector === 'input[type="radio"]') {
+            return {
+                async count() {
+                    if (state.questionIndex >= 8) return 0
+                    return 2
+                },
+                nth(index) {
+                    return {
+                        async click() {
+                            clickOrder.push(`${state.questionIndex}:${index}`)
+                            if (index === 0) {
+                                throw new Error('stale option')
+                            }
+                            state.questionIndex++
+                        }
+                    }
+                },
+                first() {
+                    return this.nth(0)
+                }
+            }
+        }
+
+        if (selector === '[data-quiz-question-id]') {
+            return {
+                async count() {
+                    return state.questionIndex >= 8 ? 0 : 1
+                },
+                first() {
+                    return {
+                        async innerText() {
+                            return `q-${state.questionIndex}`
+                        }
+                    }
+                }
+            }
+        }
+
+        return {
+            async count() {
+                return 0
+            },
+            nth() {
+                return {
+                    async click() {
+                        return undefined
+                    }
+                }
+            },
+            first() {
+                return this.nth(0)
+            }
+        }
+    }
+
+    const page = {
+        url() {
+            return state.currentUrl
+        },
+        async goto(url) {
+            navigations.push(url)
+            state.currentUrl = url
+        },
+        locator(selector) {
+            return makeLocator(selector)
+        }
+    }
+
+    await quiz.doQuiz(
+        {
+            offerId: 'quiz-8-real',
+            title: '8-question quiz real helper',
+            promotionType: 'quiz',
+            pointProgressMax: 10,
+            activityProgressMax: 80,
+            destinationUrl: 'https://rewards.bing.com/quiz-8-real'
+        },
+        page
+    )
+
+    assert.deepEqual(navigations, ['https://rewards.bing.com/quiz-8-real'])
+    assert.equal(state.questionIndex, 8)
+    assert.equal(clickOrder.includes('0:0'), true)
+    assert.equal(clickOrder.includes('0:1'), true)
+})
+
 test('Quiz.doQuiz keeps ReportActivity flow for standard quizzes', async () => {
     const Quiz = await loadQuiz()
     const bot = createQuizBot()
@@ -109,5 +208,5 @@ test('Quiz.doQuiz keeps ReportActivity flow for standard quizzes', async () => {
         { tag: 'page' }
     )
 
-    assert.equal(requests > 0, true)
+    assert.equal(requests, 2)
 })
