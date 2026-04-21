@@ -20,6 +20,8 @@ interface PromotionLike {
     pointProgressMax?: unknown
     activityProgressMax?: unknown
     exclusiveLockedFeatureStatus?: unknown
+    hash?: unknown
+    activityType?: unknown
 }
 
 function normalizeString(value: unknown): null | string {
@@ -57,8 +59,23 @@ function isPollPromotion(promotion: PromotionLike): boolean {
     return getPromotionType(promotion) === 'quiz' && hasPollScenarioDestination(promotion)
 }
 
+function hasPositiveActionability(promotion: PromotionLike): boolean {
+    const pointProgressMax = getNumeric(promotion.pointProgressMax) ?? 0
+    const activityProgressMax = getNumeric(promotion.activityProgressMax) ?? 0
+    return pointProgressMax > 0 || activityProgressMax > 0
+}
+
+function hasExecutionContractFields(promotion: PromotionLike): boolean {
+    return (
+        !!getOfferId(promotion) &&
+        !!normalizeString(promotion.hash) &&
+        !!normalizeString(promotion.activityType) &&
+        !!getDestinationUrl(promotion)
+    )
+}
+
 function isValidUrlRewardPromotion(promotion: PromotionLike): boolean {
-    return getPromotionType(promotion) === 'urlreward' && !!getDestinationUrl(promotion) && !!getOfferId(promotion)
+    return getPromotionType(promotion) === 'urlreward' && hasExecutionContractFields(promotion)
 }
 
 function isQuizPromotion(promotion: PromotionLike): boolean {
@@ -139,7 +156,10 @@ function classifyOpportunity(
         }
     }
 
-    if (isPollPromotion(promotion) || isQuizPromotion(promotion) || isValidUrlRewardPromotion(promotion)) {
+    const autoQuizOrPoll = (isPollPromotion(promotion) || isQuizPromotion(promotion)) && hasPositiveActionability(promotion)
+    const autoUrlReward = isValidUrlRewardPromotion(promotion) && hasPositiveActionability(promotion)
+
+    if (autoQuizOrPoll || autoUrlReward) {
         return {
             decision: ModernOpportunityDecision.Auto,
             reason: ModernOpportunityReason.AutoExecutable

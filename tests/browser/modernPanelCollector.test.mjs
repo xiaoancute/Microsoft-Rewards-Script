@@ -13,6 +13,8 @@ function makePromotion(overrides = {}) {
         destinationUrl: 'https://rewards.bing.com/example',
         pointProgressMax: 10,
         activityProgressMax: 10,
+        hash: 'promo-hash',
+        activityType: 'activity',
         ...overrides
     }
 }
@@ -151,4 +153,74 @@ test('collectModernPanelOpportunities includes streakBonusPromotions and classif
     assert.equal(unsupported.kind, 'quiz')
     assert.equal(unsupported.decision, 'skip')
     assert.equal(unsupported.reason, 'unsupported-promotion-type')
+})
+
+test('collectModernPanelOpportunities skips malformed urlreward missing execution fields', async () => {
+    const { collectModernPanelOpportunities } = await loadCollector()
+
+    const panelData = {
+        flyoutResult: {
+            levelBenefitsPromotion: makePromotion({
+                offerId: 'urlreward-malformed-1',
+                promotionType: 'urlreward',
+                hash: '',
+                activityType: ''
+            })
+        }
+    }
+
+    const [opportunity] = collectModernPanelOpportunities(panelData, {
+        morePromotions: [],
+        dailySetPromotions: {},
+        morePromotionsWithoutPromotionalItems: []
+    })
+
+    assert.ok(opportunity)
+    assert.equal(opportunity.offerId, 'urlreward-malformed-1')
+    assert.equal(opportunity.kind, 'urlreward')
+    assert.equal(opportunity.decision, 'skip')
+    assert.equal(opportunity.reason, 'unsupported-promotion-type')
+})
+
+test('collectModernPanelOpportunities skips zero-point quiz and poll entries', async () => {
+    const { collectModernPanelOpportunities } = await loadCollector()
+
+    const panelData = {
+        flyoutResult: {
+            streakPromotion: makePromotion({
+                offerId: 'quiz-zero-1',
+                promotionType: 'quiz',
+                destinationUrl: 'https://rewards.bing.com/quiz',
+                pointProgressMax: 0,
+                activityProgressMax: 0
+            }),
+            streakBonusPromotions: [
+                makePromotion({
+                    offerId: 'poll-zero-1',
+                    promotionType: 'quiz',
+                    destinationUrl: 'https://rewards.bing.com/anything?pollScenarioId=42',
+                    pointProgressMax: 0,
+                    activityProgressMax: 0
+                })
+            ]
+        }
+    }
+
+    const opportunities = collectModernPanelOpportunities(panelData, {
+        morePromotions: [],
+        dailySetPromotions: {},
+        morePromotionsWithoutPromotionalItems: []
+    })
+
+    const quizZero = opportunities.find((item) => item.offerId === 'quiz-zero-1')
+    assert.ok(quizZero)
+    assert.equal(quizZero.kind, 'quiz')
+    assert.equal(quizZero.decision, 'skip')
+    assert.equal(quizZero.reason, 'unsupported-promotion-type')
+
+    const pollZero = opportunities.find((item) => item.offerId === 'poll-zero-1')
+    assert.ok(pollZero)
+    assert.equal(pollZero.kind, 'poll')
+    assert.equal(pollZero.decision, 'skip')
+    assert.equal(pollZero.reason, 'unsupported-promotion-type')
 })
