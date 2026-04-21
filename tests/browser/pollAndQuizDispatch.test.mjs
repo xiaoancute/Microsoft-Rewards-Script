@@ -19,6 +19,7 @@ function makeStandardQuizPromotion() {
 test('Activities.doQuiz forwards page context for browser-capable quiz flows', async () => {
     const require = createRequire(import.meta.url)
     const indexPath = require.resolve('../../dist/index.js')
+    const previousIndexCache = require.cache[indexPath]
     require.cache[indexPath] = {
         id: indexPath,
         filename: indexPath,
@@ -63,6 +64,11 @@ test('Activities.doQuiz forwards page context for browser-capable quiz flows', a
         await activities.doQuiz(promotion, page)
     } finally {
         Quiz.prototype.doQuiz = originalQuizDoQuiz
+        if (previousIndexCache) {
+            require.cache[indexPath] = previousIndexCache
+        } else {
+            delete require.cache[indexPath]
+        }
     }
 
     assert.deepEqual(calls, ['quiz-1'])

@@ -1,5 +1,6 @@
 import type { AxiosRequestConfig } from 'axios'
 import type { BasePromotion } from '../../../interface/DashboardData'
+import type { Page } from 'patchright'
 import { Workers } from '../../Workers'
 
 export class Quiz extends Workers {
@@ -11,7 +12,7 @@ export class Quiz extends Workers {
 
     private oldBalance: number = this.bot.userData.currentPoints
 
-    async doQuiz(promotion: BasePromotion) {
+    async doQuiz(promotion: BasePromotion, _page?: Page) {
         const offerId = promotion.offerId
         this.oldBalance = Number(this.bot.userData.currentPoints ?? 0)
         const startBalance = this.oldBalance
