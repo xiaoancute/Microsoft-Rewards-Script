@@ -3,6 +3,17 @@ import type { BasePromotion } from '../../../interface/DashboardData'
 import type { Page } from 'patchright'
 import { Workers } from '../../Workers'
 
+const QUIZ_OPTION_SELECTORS = [
+    'input[type="radio"]',
+    'button[role="radio"]',
+    '.rqOption',
+    '.btOption',
+    'label[for]'
+]
+const QUIZ_MAX_QUESTION_ATTEMPTS = 8
+const QUIZ_MAX_CLICK_ATTEMPTS = 3
+const QUIZ_CONFIRMATION_READS_PER_CLICK = 2
+
 export class Quiz extends Workers {
     private cookieHeader: string = ''
 
@@ -12,7 +23,7 @@ export class Quiz extends Workers {
 
     private oldBalance: number = this.bot.userData.currentPoints
 
-    async doQuiz(promotion: BasePromotion, _page?: Page) {
+    async doQuiz(promotion: BasePromotion, page?: Page) {
         const offerId = promotion.offerId
         this.oldBalance = Number(this.bot.userData.currentPoints ?? 0)
         const startBalance = this.oldBalance
@@ -42,13 +53,12 @@ export class Quiz extends Workers {
 
             // 8题测验
             if (promotion.activityProgressMax === 80) {
-                this.bot.logger.warn(
-                    this.bot.isMobile,
-                    'QUIZ',
-                    `检测到8题测验 (activityProgressMax=80)，标记为已完成 | offerId=${offerId}`
-                )
+                if (!page) {
+                    this.bot.logger.warn(this.bot.isMobile, 'QUIZ', `8题测验缺少页面上下文，无法执行 | offerId=${offerId}`)
+                    return
+                }
 
-                // 未实现
+                await this.runEightQuestionQuiz(promotion, page, startBalance)
                 return
             }
 
@@ -171,5 +181,65 @@ export class Quiz extends Workers {
                 `doQuiz中出错 | offerId=${promotion.offerId} | 消息=${error instanceof Error ? error.message : String(error)}`
             )
         }
+    }
+
+    async runEightQuestionQuiz(promotion: BasePromotion, page: Page, startBalance: number): Promise<void> {
+        const offerId = promotion.offerId
+        let balance = Number(startBalance ?? this.bot.userData.currentPoints ?? 0)
+        let answered = 0
+
+        const currentUrl = typeof page.url === 'function' ? page.url() : ''
+        if (promotion.destinationUrl && currentUrl !== promotion.destinationUrl) {
+            await page.goto(promotion.destinationUrl).catch(() => {})
+        }
+
+        for (let questionIndex = 0; questionIndex < QUIZ_MAX_QUESTION_ATTEMPTS; questionIndex++) {
+            let clicked = false
+
+            for (const selector of QUIZ_OPTION_SELECTORS) {
+                const options = page.locator(selector)
+                const count = await options.count().catch(() => 0)
+                if (!count) continue
+
+                for (let clickAttempt = 0; clickAttempt < QUIZ_MAX_CLICK_ATTEMPTS; clickAttempt++) {
+                    clicked = await options
+                        .first()
+                        .click({ timeout: 3000 })
+                        .then(() => true)
+                        .catch(() => false)
+
+                    if (clicked) break
+                }
+
+                if (clicked) break
+            }
+
+            if (!clicked) {
+                break
+            }
+
+            answered++
+
+            for (let readAttempt = 0; readAttempt < QUIZ_CONFIRMATION_READS_PER_CLICK; readAttempt++) {
+                await this.bot.utils.wait(this.bot.utils.randomDelay(1500, 3000))
+
+                const newBalance = Number(await this.bot.browser.func.getCurrentPoints().catch(() => balance) ?? balance)
+                const gained = Math.max(0, newBalance - balance)
+
+                if (gained > 0) {
+                    this.bot.userData.currentPoints = newBalance
+                    this.bot.userData.gainedPoints = (this.bot.userData.gainedPoints ?? 0) + gained
+                    this.gainedPoints += gained
+                    balance = newBalance
+                    break
+                }
+            }
+        }
+
+        this.bot.logger.info(
+            this.bot.isMobile,
+            'QUIZ',
+            `8题测验执行结束 | offerId=${offerId} | 点击题目数=${answered} | 当前积分=${this.bot.userData.currentPoints}`
+        )
     }
 }
