@@ -9,8 +9,7 @@ export enum ModernOpportunityKind {
     Poll = 'poll',
     Quiz = 'quiz',
     UrlReward = 'urlreward',
-    InfoOnly = 'info-only',
-    Unknown = 'unknown'
+    InfoOnly = 'info-only'
 }
 
 export enum ModernOpportunityDecision {
@@ -23,7 +22,8 @@ export enum ModernOpportunityReason {
     DailyCheckInWebEntryNotSupported = 'daily-check-in-web-entry-not-supported',
     DuplicateWithLegacyWorker = 'duplicate-with-legacy-worker',
     InfoCardWithoutAction = 'info-card-without-action',
-    UnsupportedOrUnknown = 'unsupported-or-unknown'
+    LockedFeature = 'locked-feature',
+    UnsupportedPromotionType = 'unsupported-promotion-type'
 }
 
 export interface ModernPanelOpportunity {

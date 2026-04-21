@@ -19,6 +19,7 @@ interface PromotionLike {
     destinationUrl?: unknown
     pointProgressMax?: unknown
     activityProgressMax?: unknown
+    exclusiveLockedFeatureStatus?: unknown
 }
 
 function normalizeString(value: unknown): null | string {
@@ -60,6 +61,20 @@ function isValidUrlRewardPromotion(promotion: PromotionLike): boolean {
     return getPromotionType(promotion) === 'urlreward' && !!getDestinationUrl(promotion) && !!getOfferId(promotion)
 }
 
+function isQuizPromotion(promotion: PromotionLike): boolean {
+    return getPromotionType(promotion) === 'quiz'
+}
+
+function isLockedPromotion(promotion: PromotionLike): boolean {
+    const status = normalizeString(promotion.exclusiveLockedFeatureStatus)
+    if (!status) {
+        return false
+    }
+
+    const normalizedStatus = status.toLowerCase()
+    return normalizedStatus === 'locked' || normalizedStatus === 'notsupported'
+}
+
 function isInfoCardWithoutAction(promotion: PromotionLike): boolean {
     const pointProgressMax = getNumeric(promotion.pointProgressMax) ?? 0
     const activityProgressMax = getNumeric(promotion.activityProgressMax) ?? 0
@@ -88,7 +103,15 @@ function inferKind(source: ModernOpportunitySource, promotion: PromotionLike): M
         return ModernOpportunityKind.Quiz
     }
 
-    return ModernOpportunityKind.Unknown
+    if (source === ModernOpportunitySource.Streak) {
+        return ModernOpportunityKind.Quiz
+    }
+
+    if (source === ModernOpportunitySource.Level) {
+        return ModernOpportunityKind.UrlReward
+    }
+
+    return ModernOpportunityKind.CheckIn
 }
 
 function classifyOpportunity(
@@ -109,7 +132,14 @@ function classifyOpportunity(
         }
     }
 
-    if (isPollPromotion(promotion) || isValidUrlRewardPromotion(promotion)) {
+    if (isLockedPromotion(promotion)) {
+        return {
+            decision: ModernOpportunityDecision.Skip,
+            reason: ModernOpportunityReason.LockedFeature
+        }
+    }
+
+    if (isPollPromotion(promotion) || isQuizPromotion(promotion) || isValidUrlRewardPromotion(promotion)) {
         return {
             decision: ModernOpportunityDecision.Auto,
             reason: ModernOpportunityReason.AutoExecutable
@@ -118,7 +148,7 @@ function classifyOpportunity(
 
     return {
         decision: ModernOpportunityDecision.Skip,
-        reason: ModernOpportunityReason.UnsupportedOrUnknown
+        reason: ModernOpportunityReason.UnsupportedPromotionType
     }
 }
 
@@ -186,10 +216,14 @@ export function collectModernPanelOpportunities(
     legacyDashboardData?: LegacyOfferSources | null
 ): ModernPanelOpportunity[] {
     const legacyOfferIds = collectLegacyOfferIds(legacyDashboardData)
+    const streakBonusPromotions = panelData?.flyoutResult?.streakBonusPromotions ?? []
 
     const candidates = [
         toOpportunity(ModernOpportunitySource.Daily, panelData?.flyoutResult?.dailyCheckInPromotion, legacyOfferIds),
         toOpportunity(ModernOpportunitySource.Streak, panelData?.flyoutResult?.streakPromotion, legacyOfferIds),
+        ...streakBonusPromotions.map((promotion) =>
+            toOpportunity(ModernOpportunitySource.Streak, promotion, legacyOfferIds)
+        ),
         toOpportunity(ModernOpportunitySource.Level, panelData?.flyoutResult?.levelInfoPromotion, legacyOfferIds),
         toOpportunity(ModernOpportunitySource.Level, panelData?.flyoutResult?.levelBenefitsPromotion, legacyOfferIds)
     ]

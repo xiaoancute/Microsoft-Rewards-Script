@@ -110,3 +110,45 @@ test('collectModernPanelOpportunities marks streak poll as auto when not duplica
     assert.equal(opportunity.decision, 'auto')
     assert.equal(opportunity.reason, 'auto-executable')
 })
+
+test('collectModernPanelOpportunities includes streakBonusPromotions and classifies locked/unsupported entries', async () => {
+    const { collectModernPanelOpportunities } = await loadCollector()
+
+    const panelData = {
+        flyoutResult: {
+            streakBonusPromotions: [
+                makePromotion({
+                    offerId: 'streak-bonus-locked-1',
+                    promotionType: 'quiz',
+                    destinationUrl: 'https://rewards.bing.com/bonus-quiz',
+                    exclusiveLockedFeatureStatus: 'locked'
+                }),
+                makePromotion({
+                    offerId: 'streak-bonus-unsupported-1',
+                    promotionType: 'mystery',
+                    destinationUrl: 'https://rewards.bing.com/mystery'
+                })
+            ]
+        }
+    }
+
+    const opportunities = collectModernPanelOpportunities(panelData, {
+        morePromotions: [],
+        dailySetPromotions: {},
+        morePromotionsWithoutPromotionalItems: []
+    })
+
+    const locked = opportunities.find((item) => item.offerId === 'streak-bonus-locked-1')
+    assert.ok(locked)
+    assert.equal(locked.source, 'streak')
+    assert.equal(locked.kind, 'quiz')
+    assert.equal(locked.decision, 'skip')
+    assert.equal(locked.reason, 'locked-feature')
+
+    const unsupported = opportunities.find((item) => item.offerId === 'streak-bonus-unsupported-1')
+    assert.ok(unsupported)
+    assert.equal(unsupported.source, 'streak')
+    assert.equal(unsupported.kind, 'quiz')
+    assert.equal(unsupported.decision, 'skip')
+    assert.equal(unsupported.reason, 'unsupported-promotion-type')
+})
