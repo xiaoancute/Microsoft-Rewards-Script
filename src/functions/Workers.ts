@@ -234,7 +234,7 @@ export class Workers {
                                 `发现活动类型 "Poll" | 标题="${activity.title}" | offerId=${offerId}`
                             )
 
-                            //await this.bot.activities.doPoll(basePromotion)
+                            await this.bot.activities.doPoll(basePromotion, page)
                             break
                         }
 

@@ -16,6 +16,59 @@ function makeStandardQuizPromotion() {
     }
 }
 
+function createBot(overrides = {}) {
+    return {
+        isMobile: false,
+        logger: {
+            info() {},
+            debug() {},
+            warn() {},
+            error() {}
+        },
+        utils: {
+            getFormattedDate() {
+                return '04/21/2026'
+            },
+            async wait() {},
+            randomDelay() {
+                return 0
+            }
+        },
+        activities: {
+            async doPoll() {},
+            async doQuiz() {},
+            async doSearchOnBing() {},
+            async doDaily() {},
+            async doFindClippy() {},
+            async doDoubleSearchPoints() {}
+        },
+        ...overrides
+    }
+}
+
+function makePollPromotion() {
+    return {
+        offerId: 'poll-1',
+        title: 'poll card',
+        promotionType: 'quiz',
+        destinationUrl: 'https://rewards.bing.com/?pollScenarioId=123',
+        pointProgressMax: 10,
+        pointProgress: 0,
+        complete: false,
+        exclusiveLockedFeatureStatus: 'unlocked'
+    }
+}
+
+async function loadWorkers() {
+    const mod = await import('../../dist/functions/Workers.js')
+    return mod.Workers
+}
+
+async function loadPoll() {
+    const mod = await import('../../dist/functions/activities/browser/Poll.js')
+    return mod.Poll
+}
+
 test('Activities.doQuiz forwards page context for browser-capable quiz flows', async () => {
     const require = createRequire(import.meta.url)
     const indexPath = require.resolve('../../dist/index.js')
@@ -73,4 +126,82 @@ test('Activities.doQuiz forwards page context for browser-capable quiz flows', a
 
     assert.deepEqual(calls, ['quiz-1'])
     assert.equal(receivedPage, page)
+})
+
+test('Workers.doMorePromotions routes poll-shaped quiz promotions to doPoll', async () => {
+    const Workers = await loadWorkers()
+    let pollCalls = 0
+    let quizCalls = 0
+
+    const bot = createBot({
+        activities: {
+            async doPoll(promotion, page) {
+                pollCalls++
+                assert.equal(promotion.offerId, 'poll-1')
+                assert.equal(page.tag, 'page')
+            },
+            async doQuiz() {
+                quizCalls++
+            },
+            async doSearchOnBing() {},
+            async doDaily() {},
+            async doFindClippy() {},
+            async doDoubleSearchPoints() {}
+        }
+    })
+
+    const workers = new Workers(bot)
+
+    await workers.doMorePromotions(
+        {
+            morePromotions: [makePollPromotion()],
+            morePromotionsWithoutPromotionalItems: []
+        },
+        { tag: 'page' }
+    )
+
+    assert.equal(pollCalls, 1)
+    assert.equal(quizCalls, 0)
+})
+
+test('Poll.doPoll clicks one available option and refreshes points', async () => {
+    const Poll = await loadPoll()
+    const clicked = []
+    let balanceReads = 0
+
+    const bot = createBot({
+        userData: {
+            currentPoints: 100,
+            gainedPoints: 0,
+            geoLocale: 'us'
+        },
+        browser: {
+            utils: {
+                async ghostClick(page, selector) {
+                    clicked.push(selector)
+                    return true
+                }
+            },
+            func: {
+                async getCurrentPoints() {
+                    balanceReads++
+                    return 110
+                }
+            }
+        }
+    })
+
+    const poll = new Poll(bot)
+    const page = {
+        async waitForSelector() {},
+        locator() {
+            return { count: async () => 1 }
+        }
+    }
+
+    await poll.doPoll(makePollPromotion(), page)
+
+    assert.equal(clicked.length, 1)
+    assert.equal(balanceReads, 1)
+    assert.equal(bot.userData.currentPoints, 110)
 })

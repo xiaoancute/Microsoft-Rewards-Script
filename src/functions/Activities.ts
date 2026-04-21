@@ -17,6 +17,7 @@ import { DoubleSearchPoints } from './activities/api/DoubleSearchPoints'
 // Browser
 import { SearchOnBing } from './activities/browser/SearchOnBing'
 import { Search } from './activities/browser/Search'
+import { Poll } from './activities/browser/Poll'
 
 import type {
     BasePromotion,
@@ -52,12 +53,10 @@ export default class Activities {
     }
     */
 
-    /*
-    doPoll = async (page: Page): Promise<void> => {
+    doPoll = async (promotion: BasePromotion, page: Page): Promise<void> => {
         const poll = new Poll(this.bot)
-        await poll.doPoll(page)
+        await poll.doPoll(promotion, page)
     }
-    */
 
     /*
     doThisOrThat = async (page: Page): Promise<void> => {
