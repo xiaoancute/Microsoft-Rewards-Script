@@ -267,3 +267,134 @@ test('collectModernPanelOpportunities skips completed modern promotions', async 
     assert.equal(completedUrlreward.decision, 'skip')
     assert.equal(completedUrlreward.reason, 'unsupported-promotion-type')
 })
+
+test('collectModernPanelOpportunities auto-runs blank-offerId poll and 8-question quiz entries with stable opportunity keys', async () => {
+    const { collectModernPanelOpportunities } = await loadCollector()
+
+    const panelData = {
+        flyoutResult: {
+            streakPromotion: makePromotion({
+                offerId: '   ',
+                title: 'Blank Poll',
+                promotionType: 'quiz',
+                destinationUrl: 'https://rewards.bing.com/task?pollScenarioId=101',
+                pointProgressMax: 10,
+                activityProgressMax: 10
+            }),
+            streakBonusPromotions: [
+                makePromotion({
+                    offerId: '   ',
+                    title: 'Blank Eight Quiz',
+                    promotionType: 'quiz',
+                    destinationUrl: 'https://rewards.bing.com/quiz/eight',
+                    pointProgressMax: 10,
+                    activityProgressMax: 80
+                })
+            ]
+        }
+    }
+
+    const opportunities = collectModernPanelOpportunities(panelData, {
+        morePromotions: [],
+        dailySetPromotions: {},
+        morePromotionsWithoutPromotionalItems: []
+    })
+
+    const blankPoll = opportunities.find((item) => item.title === 'Blank Poll')
+    assert.ok(blankPoll)
+    assert.equal(blankPoll.offerId, null)
+    assert.equal(blankPoll.offerIdState, 'blank')
+    assert.equal(blankPoll.kind, 'poll')
+    assert.equal(blankPoll.decision, 'auto')
+    assert.equal(blankPoll.reason, 'auto-executable-without-offerid')
+    assert.match(blankPoll.opportunityKey, /^streak\|poll\|quiz\|https:\/\/rewards\.bing\.com\/task\?pollscenarioid=101\|blank poll\|unknown$/)
+
+    const blankEightQuiz = opportunities.find((item) => item.title === 'Blank Eight Quiz')
+    assert.ok(blankEightQuiz)
+    assert.equal(blankEightQuiz.offerId, null)
+    assert.equal(blankEightQuiz.offerIdState, 'blank')
+    assert.equal(blankEightQuiz.kind, 'quiz')
+    assert.equal(blankEightQuiz.decision, 'auto')
+    assert.equal(blankEightQuiz.reason, 'auto-executable-without-offerid')
+    assert.match(blankEightQuiz.opportunityKey, /^streak\|quiz\|quiz\|https:\/\/rewards\.bing\.com\/quiz\/eight\|blank eight quiz\|unknown$/)
+})
+
+test('collectModernPanelOpportunities skips blank-offerId standard quiz and urlreward entries that still require API execution', async () => {
+    const { collectModernPanelOpportunities } = await loadCollector()
+
+    const panelData = {
+        flyoutResult: {
+            streakPromotion: makePromotion({
+                offerId: '   ',
+                title: 'Blank Standard Quiz',
+                promotionType: 'quiz',
+                destinationUrl: 'https://rewards.bing.com/quiz/standard',
+                pointProgressMax: 30,
+                activityProgressMax: 30
+            }),
+            levelBenefitsPromotion: makePromotion({
+                offerId: '   ',
+                title: 'Blank UrlReward',
+                promotionType: 'urlreward',
+                destinationUrl: 'https://rewards.bing.com/level-benefits',
+                pointProgressMax: 10,
+                activityProgressMax: 10
+            })
+        }
+    }
+
+    const opportunities = collectModernPanelOpportunities(panelData, {
+        morePromotions: [],
+        dailySetPromotions: {},
+        morePromotionsWithoutPromotionalItems: []
+    })
+
+    const blankStandardQuiz = opportunities.find((item) => item.title === 'Blank Standard Quiz')
+    assert.ok(blankStandardQuiz)
+    assert.equal(blankStandardQuiz.kind, 'quiz')
+    assert.equal(blankStandardQuiz.decision, 'skip')
+    assert.equal(blankStandardQuiz.reason, 'missing-offerid-requires-api-execution')
+
+    const blankUrlReward = opportunities.find((item) => item.title === 'Blank UrlReward')
+    assert.ok(blankUrlReward)
+    assert.equal(blankUrlReward.kind, 'urlreward')
+    assert.equal(blankUrlReward.decision, 'skip')
+    assert.equal(blankUrlReward.reason, 'missing-offerid-requires-api-execution')
+})
+
+test('collectModernPanelOpportunities de-duplicates blank-offerId cards by opportunityKey', async () => {
+    const { collectModernPanelOpportunities } = await loadCollector()
+
+    const duplicatePoll = makePromotion({
+        offerId: '   ',
+        title: 'Duplicate Blank Poll',
+        promotionType: 'quiz',
+        destinationUrl: 'https://rewards.bing.com/task?pollScenarioId=500',
+        pointProgressMax: 10,
+        activityProgressMax: 10
+    })
+
+    const panelData = {
+        flyoutResult: {
+            streakPromotion: duplicatePoll,
+            streakBonusPromotions: [
+                {
+                    ...duplicatePoll,
+                    pointProgressMax: 0,
+                    activityProgressMax: 0
+                }
+            ]
+        }
+    }
+
+    const opportunities = collectModernPanelOpportunities(panelData, {
+        morePromotions: [],
+        dailySetPromotions: {},
+        morePromotionsWithoutPromotionalItems: []
+    })
+
+    const duplicates = opportunities.filter((item) => item.title === 'Duplicate Blank Poll')
+    assert.equal(duplicates.length, 1)
+    assert.equal(duplicates[0].decision, 'auto')
+    assert.equal(duplicates[0].reason, 'auto-executable-without-offerid')
+})
