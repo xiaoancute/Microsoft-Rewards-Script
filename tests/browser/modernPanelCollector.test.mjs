@@ -398,3 +398,58 @@ test('collectModernPanelOpportunities de-duplicates blank-offerId cards by oppor
     assert.equal(duplicates[0].decision, 'auto')
     assert.equal(duplicates[0].reason, 'auto-executable-without-offerid')
 })
+
+test('collectModernPanelOpportunities records diagnostic state for unknown string fields', async () => {
+    const { collectModernPanelOpportunities } = await loadCollector()
+
+    const panelData = {
+        flyoutResult: {
+            streakPromotion: makePromotion({
+                offerId: undefined,
+                promotionType: 'quiz',
+                destinationUrl: 'https://rewards.bing.com/task?pollScenarioId=99',
+                pointProgressMax: 0,
+                activityProgressMax: 0
+            }),
+            levelInfoPromotion: makePromotion({
+                offerId: '   ',
+                promotionType: '   ',
+                destinationUrl: '',
+                pointProgressMax: 0,
+                activityProgressMax: 0
+            }),
+            levelBenefitsPromotion: makePromotion({
+                offerId: 12345,
+                promotionType: { kind: 'urlreward' },
+                destinationUrl: 'https://rewards.bing.com/level-benefits'
+            })
+        }
+    }
+
+    const opportunities = collectModernPanelOpportunities(panelData, {
+        morePromotions: [],
+        dailySetPromotions: {},
+        morePromotionsWithoutPromotionalItems: []
+    })
+
+    const missingOfferId = opportunities.find((item) => item.source === 'streak')
+    assert.ok(missingOfferId)
+    assert.equal(missingOfferId.offerId, null)
+    assert.equal(missingOfferId.offerIdState, 'missing')
+    assert.equal(missingOfferId.promotionType, 'quiz')
+    assert.equal(missingOfferId.promotionTypeState, 'normalized')
+
+    const blankFields = opportunities.find((item) => item.source === 'level' && item.reason === 'info-card-without-action')
+    assert.ok(blankFields)
+    assert.equal(blankFields.offerId, null)
+    assert.equal(blankFields.offerIdState, 'blank')
+    assert.equal(blankFields.promotionType, null)
+    assert.equal(blankFields.promotionTypeState, 'blank')
+
+    const invalidFields = opportunities.find((item) => item.source === 'level' && item.reason === 'unsupported-promotion-type')
+    assert.ok(invalidFields)
+    assert.equal(invalidFields.offerId, null)
+    assert.equal(invalidFields.offerIdState, 'invalid-type')
+    assert.equal(invalidFields.promotionType, null)
+    assert.equal(invalidFields.promotionTypeState, 'invalid-type')
+})

@@ -296,3 +296,43 @@ test('Workers.doModernPanelPromotions keeps blank-offerId api-required quiz card
     assert.match(modernActivityLogs[0], /reason=missing-offerid-requires-api-execution/)
     assert.match(modernActivityLogs[0], /opportunityKey=streak\|quiz\|quiz\|https:\/\/rewards\.bing\.com\/quiz\/standard\|blank standard quiz\|unknown/)
 })
+
+test('Workers.doModernPanelPromotions logs diagnostic state for unknown offer ids', async () => {
+    const Workers = await loadWorkers()
+    const { bot, logs, dispatchCalls, getWaitCalls, getRandomDelayCalls } = createBot()
+    const workers = new Workers(bot)
+
+    await workers.doModernPanelPromotions(
+        {
+            flyoutResult: {
+                streakPromotion: makePromotion({
+                    offerId: '   ',
+                    promotionType: 'quiz',
+                    destinationUrl: 'https://rewards.bing.com/task?pollScenarioId=101',
+                    pointProgressMax: 0,
+                    activityProgressMax: 0
+                })
+            }
+        },
+        {
+            morePromotions: [],
+            dailySetPromotions: {},
+            morePromotionsWithoutPromotionalItems: []
+        },
+        { tag: 'modern-page' }
+    )
+
+    assert.deepEqual(dispatchCalls, [])
+    assert.equal(getWaitCalls(), 0)
+    assert.equal(getRandomDelayCalls(), 0)
+
+    const modernActivityLogs = logs
+        .filter((entry) => entry[0] === 'info' && entry[1] === false && entry[2] === 'MODERN-ACTIVITY')
+        .map((entry) => entry[3])
+
+    assert.equal(modernActivityLogs.length, 1)
+    assert.match(modernActivityLogs[0], /offerId=unknown/)
+    assert.match(modernActivityLogs[0], /offerIdState=blank/)
+    assert.match(modernActivityLogs[0], /promotionType=quiz/)
+    assert.match(modernActivityLogs[0], /promotionTypeState=normalized/)
+})
