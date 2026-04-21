@@ -63,7 +63,13 @@ export async function executeModernPanelOpportunities(
                 }
 
                 case ModernOpportunityKind.UrlReward: {
-                    await bot.activities.doDaily(promotion)
+                    const name = promotion.name?.toLowerCase() ?? ''
+
+                    if (name.includes('exploreonbing')) {
+                        await bot.activities.doSearchOnBing(promotion, page)
+                    } else {
+                        await bot.activities.doDaily(promotion)
+                    }
                     break
                 }
 

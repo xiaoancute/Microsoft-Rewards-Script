@@ -59,6 +59,9 @@ function createBot(overrides = {}) {
             async doQuiz(promotion, page) {
                 dispatchCalls.push(['quiz', promotion.offerId, page])
             },
+            async doSearchOnBing(promotion, page) {
+                dispatchCalls.push(['searchOnBing', promotion.offerId, page])
+            },
             async doDaily(promotion) {
                 dispatchCalls.push(['urlreward', promotion.offerId])
             }
@@ -181,4 +184,34 @@ test('Workers.doModernPanelPromotions logs no-op MODERN-PANEL message when no op
 
     assert.equal(modernPanelLogs.length, 1)
     assert.match(modernPanelLogs[0], /未收集到可执行的现代面板活动/)
+})
+
+test('Workers.doModernPanelPromotions routes exploreonbing urlreward promotions to doSearchOnBing', async () => {
+    const Workers = await loadWorkers()
+    const { bot, dispatchCalls, getWaitCalls, getRandomDelayCalls } = createBot()
+    const workers = new Workers(bot)
+    const page = { tag: 'modern-page' }
+
+    await workers.doModernPanelPromotions(
+        {
+            flyoutResult: {
+                levelBenefitsPromotion: makePromotion({
+                    offerId: 'modern-exploreonbing-1',
+                    name: 'ExploreOnBingBonus',
+                    promotionType: 'urlreward',
+                    destinationUrl: 'https://rewards.bing.com/explore-on-bing'
+                })
+            }
+        },
+        {
+            morePromotions: [],
+            dailySetPromotions: {},
+            morePromotionsWithoutPromotionalItems: []
+        },
+        page
+    )
+
+    assert.deepEqual(dispatchCalls, [['searchOnBing', 'modern-exploreonbing-1', page]])
+    assert.equal(getWaitCalls(), 1)
+    assert.equal(getRandomDelayCalls(), 1)
 })
