@@ -33,7 +33,7 @@ export async function executeModernPanelOpportunities(
         bot.logger.info(
             bot.isMobile,
             'MODERN-ACTIVITY',
-            `source=${opportunity.source} | offerId=${opportunity.offerId ?? 'unknown'} | promotionType=${opportunity.promotionType ?? 'unknown'} | decision=${opportunity.decision} | reason=${opportunity.reason}`
+            `source=${opportunity.source} | offerId=${opportunity.offerId ?? 'unknown'} | offerIdState=${opportunity.offerIdState} | opportunityKey=${opportunity.opportunityKey} | promotionType=${opportunity.promotionType ?? 'unknown'} | promotionTypeState=${opportunity.promotionTypeState} | decision=${opportunity.decision} | reason=${opportunity.reason}`
         )
 
         if (opportunity.decision !== ModernOpportunityDecision.Auto) {
