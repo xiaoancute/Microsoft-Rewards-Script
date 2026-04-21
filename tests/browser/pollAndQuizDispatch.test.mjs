@@ -164,9 +164,10 @@ test('Workers.doMorePromotions routes poll-shaped quiz promotions to doPoll', as
     assert.equal(quizCalls, 0)
 })
 
-test('Poll.doPoll clicks one available option and refreshes points', async () => {
+test('Poll.doPoll opens destination, clicks first option, and refreshes points with confirmation reads', async () => {
     const Poll = await loadPoll()
-    const clicked = []
+    const navigations = []
+    let clickCalls = 0
     let balanceReads = 0
 
     const bot = createBot({
@@ -176,15 +177,10 @@ test('Poll.doPoll clicks one available option and refreshes points', async () =>
             geoLocale: 'us'
         },
         browser: {
-            utils: {
-                async ghostClick(page, selector) {
-                    clicked.push(selector)
-                    return true
-                }
-            },
             func: {
                 async getCurrentPoints() {
                     balanceReads++
+                    if (balanceReads === 1) return 100
                     return 110
                 }
             }
@@ -193,15 +189,74 @@ test('Poll.doPoll clicks one available option and refreshes points', async () =>
 
     const poll = new Poll(bot)
     const page = {
-        async waitForSelector() {},
+        async goto(url) {
+            navigations.push(url)
+        },
         locator() {
-            return { count: async () => 1 }
+            return {
+                count: async () => 1,
+                first() {
+                    return {
+                        async click() {
+                            clickCalls++
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    const promotion = makePollPromotion()
+    await poll.doPoll(promotion, page)
+
+    assert.deepEqual(navigations, [promotion.destinationUrl])
+    assert.equal(clickCalls, 1)
+    assert.equal(balanceReads, 2)
+    assert.equal(bot.userData.currentPoints, 110)
+})
+
+test('Poll.doPoll retries click attempts when first confirmation cycle has no points', async () => {
+    const Poll = await loadPoll()
+    let clickCalls = 0
+    let balanceReads = 0
+
+    const bot = createBot({
+        userData: {
+            currentPoints: 100,
+            gainedPoints: 0,
+            geoLocale: 'us'
+        },
+        browser: {
+            func: {
+                async getCurrentPoints() {
+                    balanceReads++
+                    if (balanceReads < 4) return 100
+                    return 110
+                }
+            }
+        }
+    })
+
+    const poll = new Poll(bot)
+    const page = {
+        async goto() {},
+        locator() {
+            return {
+                count: async () => 1,
+                first() {
+                    return {
+                        async click() {
+                            clickCalls++
+                        }
+                    }
+                }
+            }
         }
     }
 
     await poll.doPoll(makePollPromotion(), page)
 
-    assert.equal(clicked.length, 1)
-    assert.equal(balanceReads, 1)
+    assert.equal(clickCalls, 2)
+    assert.equal(balanceReads, 4)
     assert.equal(bot.userData.currentPoints, 110)
 })
