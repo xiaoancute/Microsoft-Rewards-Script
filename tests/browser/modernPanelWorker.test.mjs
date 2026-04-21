@@ -215,3 +215,84 @@ test('Workers.doModernPanelPromotions routes exploreonbing urlreward promotions 
     assert.equal(getWaitCalls(), 1)
     assert.equal(getRandomDelayCalls(), 1)
 })
+
+test('Workers.doModernPanelPromotions routes blank-offerId poll cards through browser execution', async () => {
+    const Workers = await loadWorkers()
+    const { bot, logs, dispatchCalls, getWaitCalls, getRandomDelayCalls } = createBot()
+    const workers = new Workers(bot)
+    const page = { tag: 'modern-page' }
+
+    await workers.doModernPanelPromotions(
+        {
+            flyoutResult: {
+                streakPromotion: makePromotion({
+                    offerId: '   ',
+                    title: 'Blank Poll',
+                    promotionType: 'quiz',
+                    destinationUrl: 'https://rewards.bing.com/task?pollScenarioId=101',
+                    pointProgressMax: 10,
+                    activityProgressMax: 10
+                })
+            }
+        },
+        {
+            morePromotions: [],
+            dailySetPromotions: {},
+            morePromotionsWithoutPromotionalItems: []
+        },
+        page
+    )
+
+    assert.deepEqual(dispatchCalls, [['poll', '   ', page]])
+    assert.equal(getWaitCalls(), 1)
+    assert.equal(getRandomDelayCalls(), 1)
+
+    const modernActivityLogs = logs
+        .filter((entry) => entry[0] === 'info' && entry[1] === false && entry[2] === 'MODERN-ACTIVITY')
+        .map((entry) => entry[3])
+
+    assert.equal(modernActivityLogs.length, 1)
+    assert.match(modernActivityLogs[0], /offerId=unknown/)
+    assert.match(modernActivityLogs[0], /reason=auto-executable-without-offerid/)
+    assert.match(modernActivityLogs[0], /opportunityKey=streak\|poll\|quiz\|https:\/\/rewards\.bing\.com\/task\?pollscenarioid=101\|blank poll\|unknown/)
+})
+
+test('Workers.doModernPanelPromotions keeps blank-offerId api-required quiz cards skipped', async () => {
+    const Workers = await loadWorkers()
+    const { bot, logs, dispatchCalls, getWaitCalls, getRandomDelayCalls } = createBot()
+    const workers = new Workers(bot)
+
+    await workers.doModernPanelPromotions(
+        {
+            flyoutResult: {
+                streakPromotion: makePromotion({
+                    offerId: '   ',
+                    title: 'Blank Standard Quiz',
+                    promotionType: 'quiz',
+                    destinationUrl: 'https://rewards.bing.com/quiz/standard',
+                    pointProgressMax: 30,
+                    activityProgressMax: 30
+                })
+            }
+        },
+        {
+            morePromotions: [],
+            dailySetPromotions: {},
+            morePromotionsWithoutPromotionalItems: []
+        },
+        { tag: 'modern-page' }
+    )
+
+    assert.deepEqual(dispatchCalls, [])
+    assert.equal(getWaitCalls(), 0)
+    assert.equal(getRandomDelayCalls(), 0)
+
+    const modernActivityLogs = logs
+        .filter((entry) => entry[0] === 'info' && entry[1] === false && entry[2] === 'MODERN-ACTIVITY')
+        .map((entry) => entry[3])
+
+    assert.equal(modernActivityLogs.length, 1)
+    assert.match(modernActivityLogs[0], /offerIdState=blank/)
+    assert.match(modernActivityLogs[0], /reason=missing-offerid-requires-api-execution/)
+    assert.match(modernActivityLogs[0], /opportunityKey=streak\|quiz\|quiz\|https:\/\/rewards\.bing\.com\/quiz\/standard\|blank standard quiz\|unknown/)
+})
