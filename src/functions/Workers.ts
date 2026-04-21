@@ -245,7 +245,7 @@ export class Workers {
                             `发现活动类型 "Quiz" | 标题="${activity.title}" | offerId=${offerId}`
                         )
 
-                        await this.bot.activities.doQuiz(basePromotion)
+                        await this.bot.activities.doQuiz(basePromotion, page)
                         break
                     }
 
