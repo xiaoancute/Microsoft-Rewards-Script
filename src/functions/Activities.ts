@@ -77,9 +77,12 @@ export default class Activities {
         await urlReward.doUrlReward(promotion)
     }
 
-    doQuiz = async (promotion: BasePromotion): Promise<void> => {
+    doQuiz = async (promotion: BasePromotion, page?: Page): Promise<void> => {
         const quiz = new Quiz(this.bot)
-        await quiz.doQuiz(promotion)
+        await (quiz as { doQuiz: (promotion: BasePromotion, page?: Page) => Promise<void> }).doQuiz(
+            promotion,
+            page
+        )
     }
 
     doFindClippy = async (promotion: FindClippyPromotion): Promise<void> => {
