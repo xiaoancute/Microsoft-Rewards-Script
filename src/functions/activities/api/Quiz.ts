@@ -28,6 +28,7 @@ export class Quiz extends Workers {
         const offerId = promotion.offerId
         this.oldBalance = Number(this.bot.userData.currentPoints ?? 0)
         const startBalance = this.oldBalance
+        const normalizedOfferId = typeof offerId === 'string' ? offerId.trim() : ''
 
         this.bot.logger.info(
             this.bot.isMobile,
@@ -65,6 +66,21 @@ export class Quiz extends Workers {
 
             // 标准积分测验 (20/30/40/50 最大值)
             if ([20, 30, 40, 50].includes(promotion.pointProgressMax)) {
+                if (!normalizedOfferId) {
+                    if (!page) {
+                        this.bot.logger.warn(this.bot.isMobile, 'QUIZ', '标准测验缺少页面上下文，无法执行浏览器兜底')
+                        return
+                    }
+
+                    if (!promotion.destinationUrl) {
+                        this.bot.logger.warn(this.bot.isMobile, 'QUIZ', '标准测验缺少目标地址，无法执行浏览器兜底')
+                        return
+                    }
+
+                    await this.runBrowserQuiz(promotion, page, startBalance)
+                    return
+                }
+
                 let oldBalance = startBalance
                 let gainedPoints = 0
                 const maxAttempts = 20
@@ -182,6 +198,79 @@ export class Quiz extends Workers {
                 `doQuiz中出错 | offerId=${promotion.offerId} | 消息=${error instanceof Error ? error.message : String(error)}`
             )
         }
+    }
+
+    async runBrowserQuiz(promotion: BasePromotion, page: Page, startBalance: number): Promise<void> {
+        const offerId = promotion.offerId
+        let balance = Number(startBalance ?? this.bot.userData.currentPoints ?? 0)
+        let answered = 0
+        let candidateStartIndex = 0
+        const maxQuestionAttempts = Math.max(1, Math.ceil((promotion.pointProgressMax ?? 10) / 10))
+
+        const currentUrl = typeof page.url === 'function' ? page.url() : ''
+        if (promotion.destinationUrl && currentUrl !== promotion.destinationUrl) {
+            await page.goto(promotion.destinationUrl).catch((error) => {
+                this.bot.logger.warn(
+                    this.bot.isMobile,
+                    'QUIZ',
+                    `浏览器测验跳转失败 | offerId=${offerId} | url=${promotion.destinationUrl} | 消息=${error instanceof Error ? error.message : String(error)}`
+                )
+            })
+        }
+
+        for (let questionIndex = 0; questionIndex < maxQuestionAttempts; questionIndex++) {
+            let progressed = false
+            let clicked = false
+            const signatureBeforeClick = await this.captureQuizSignature(page)
+
+            for (let clickAttempt = 0; clickAttempt < QUIZ_MAX_CLICK_ATTEMPTS && !progressed; clickAttempt++) {
+                const clickResult = await this.clickQuizCandidate(page, candidateStartIndex)
+                candidateStartIndex = clickResult.nextCandidateStartIndex
+                if (!clickResult.clicked) break
+                clicked = true
+
+                for (let readAttempt = 0; readAttempt < QUIZ_CONFIRMATION_READS_PER_CLICK; readAttempt++) {
+                    await this.bot.utils.wait(this.bot.utils.randomDelay(1500, 3000))
+
+                    const newBalance = Number(await this.bot.browser.func.getCurrentPoints().catch(() => balance) ?? balance)
+                    const gained = Math.max(0, newBalance - balance)
+                    const signatureAfterClick = await this.captureQuizSignature(page)
+                    const signatureChanged =
+                        Boolean(signatureBeforeClick) || Boolean(signatureAfterClick)
+                            ? signatureAfterClick !== signatureBeforeClick
+                            : false
+
+                    if (gained > 0) {
+                        this.bot.userData.currentPoints = newBalance
+                        this.bot.userData.gainedPoints = (this.bot.userData.gainedPoints ?? 0) + gained
+                        this.gainedPoints += gained
+                        balance = newBalance
+                    }
+
+                    if (gained > 0 || signatureChanged) {
+                        progressed = true
+                        break
+                    }
+                }
+            }
+
+            if (!clicked || !progressed) {
+                this.bot.logger.warn(
+                    this.bot.isMobile,
+                    'QUIZ',
+                    `浏览器测验未确认进度，提前结束 | offerId=${offerId} | 题序=${questionIndex + 1}`
+                )
+                break
+            }
+
+            answered++
+        }
+
+        this.bot.logger.info(
+            this.bot.isMobile,
+            'QUIZ',
+            `浏览器测验执行结束 | offerId=${offerId} | 点击题目数=${answered} | 当前积分=${this.bot.userData.currentPoints}`
+        )
     }
 
     async runEightQuestionQuiz(promotion: BasePromotion, page: Page, startBalance: number): Promise<void> {

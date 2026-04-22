@@ -18,6 +18,7 @@ import { DoubleSearchPoints } from './activities/api/DoubleSearchPoints'
 import { SearchOnBing } from './activities/browser/SearchOnBing'
 import { Search } from './activities/browser/Search'
 import { Poll } from './activities/browser/Poll'
+import { OpenUrlReward } from './activities/browser/OpenUrlReward'
 
 import type {
     BasePromotion,
@@ -26,6 +27,8 @@ import type {
     PurplePromotionalItem
 } from '../interface/DashboardData'
 import type { Promotion } from '../interface/AppDashBoardData'
+
+const dailyCheckInHandledBots = new WeakSet<object>()
 
 // 活动处理类 - 负责执行各种Microsoft Rewards活动
 export default class Activities {
@@ -56,6 +59,11 @@ export default class Activities {
     doPoll = async (promotion: BasePromotion, page: Page): Promise<void> => {
         const poll = new Poll(this.bot)
         await poll.doPoll(promotion, page)
+    }
+
+    doOpenUrlReward = async (promotion: BasePromotion, page: Page): Promise<void> => {
+        const openUrlReward = new OpenUrlReward(this.bot)
+        await openUrlReward.doOpenUrlReward(promotion, page)
     }
 
     /*
@@ -103,6 +111,13 @@ export default class Activities {
     }
 
     doDailyCheckIn = async (): Promise<void> => {
+        const botRef = this.bot as unknown as object
+        if (dailyCheckInHandledBots.has(botRef)) {
+            this.bot.logger.info(this.bot.isMobile, 'DAILY-CHECK-IN', '本轮已处理过每日签到，跳过重复执行')
+            return
+        }
+
+        dailyCheckInHandledBots.add(botRef)
         const dailyCheckIn = new DailyCheckIn(this.bot)
         await dailyCheckIn.doDailyCheckIn()
     }

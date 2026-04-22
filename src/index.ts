@@ -556,19 +556,19 @@ export class MicrosoftRewardsBot {
                 const browserEarnable = await this.browser.func.getBrowserEarnablePoints()
                 const appEarnable = await this.browser.func.getAppEarnablePoints()
 
-                this.pointsCanCollect = browserEarnable.mobileSearchPoints + (appEarnable?.totalEarnablePoints ?? 0)
+                this.pointsCanCollect = browserEarnable.totalEarnablePoints + (appEarnable?.totalEarnablePoints ?? 0)
 
                 this.logger.info(
                     'main',
                     'POINTS',
-                    `今日可赚取 | 移动端: ${this.pointsCanCollect} | 浏览器: ${
-                        browserEarnable.mobileSearchPoints
+                    `今日可赚取 | 总计: ${this.pointsCanCollect} | 浏览器: ${
+                        browserEarnable.totalEarnablePoints
                     } | 应用: ${appEarnable?.totalEarnablePoints ?? 0} | ${accountEmail} | 区域设置: ${this.userData.geoLocale}`
                 )
 
                 if (this.config.workers.doAppPromotions) await this.workers.doAppPromotions(appData)
                 if (this.config.workers.doDailySet) await this.workers.doDailySet(data, this.mainMobilePage)
-                if (this.config.workers.doSpecialPromotions) await this.workers.doSpecialPromotions(data)
+                if (this.config.workers.doSpecialPromotions) await this.workers.doSpecialPromotions(data, this.mainMobilePage)
                 if (this.config.workers.doMorePromotions) await this.workers.doMorePromotions(data, this.mainMobilePage)
                 if (this.config.workers.doDailyCheckIn) await this.activities.doDailyCheckIn()
                 if (this.config.workers.doReadToEarn) await this.activities.doReadToEarn()

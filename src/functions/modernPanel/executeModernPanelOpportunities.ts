@@ -52,6 +52,11 @@ export async function executeModernPanelOpportunities(
 
         try {
             switch (opportunity.kind) {
+                case ModernOpportunityKind.CheckIn: {
+                    await bot.activities.doDailyCheckIn()
+                    break
+                }
+
                 case ModernOpportunityKind.Poll: {
                     await bot.activities.doPoll(promotion, page)
                     break
@@ -65,8 +70,10 @@ export async function executeModernPanelOpportunities(
                 case ModernOpportunityKind.UrlReward: {
                     const name = promotion.name?.toLowerCase() ?? ''
 
-                    if (name.includes('exploreonbing')) {
+                    if (name.includes('exploreonbing') && opportunity.offerId) {
                         await bot.activities.doSearchOnBing(promotion, page)
+                    } else if (!opportunity.offerId) {
+                        await bot.activities.doOpenUrlReward(promotion, page)
                     } else {
                         await bot.activities.doDaily(promotion)
                     }

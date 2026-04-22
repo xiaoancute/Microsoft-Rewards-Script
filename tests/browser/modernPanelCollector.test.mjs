@@ -62,8 +62,8 @@ test('collectModernPanelOpportunities classifies modern cards and de-duplicates 
     const daily = bySource.get('daily')
     assert.ok(daily)
     assert.equal(daily.kind, 'checkin')
-    assert.equal(daily.decision, 'skip')
-    assert.equal(daily.reason, 'daily-check-in-web-entry-not-supported')
+    assert.equal(daily.decision, 'auto')
+    assert.equal(daily.reason, 'auto-executable')
 
     const streak = bySource.get('streak')
     assert.ok(streak)
@@ -319,7 +319,7 @@ test('collectModernPanelOpportunities auto-runs blank-offerId poll and 8-questio
     assert.match(blankEightQuiz.opportunityKey, /^streak\|quiz\|quiz\|https:\/\/rewards\.bing\.com\/quiz\/eight\|blank eight quiz\|unknown$/)
 })
 
-test('collectModernPanelOpportunities skips blank-offerId standard quiz and urlreward entries that still require API execution', async () => {
+test('collectModernPanelOpportunities auto-runs blank-offerId standard quiz and urlreward entries with browser fallbacks', async () => {
     const { collectModernPanelOpportunities } = await loadCollector()
 
     const panelData = {
@@ -352,14 +352,14 @@ test('collectModernPanelOpportunities skips blank-offerId standard quiz and urlr
     const blankStandardQuiz = opportunities.find((item) => item.title === 'Blank Standard Quiz')
     assert.ok(blankStandardQuiz)
     assert.equal(blankStandardQuiz.kind, 'quiz')
-    assert.equal(blankStandardQuiz.decision, 'skip')
-    assert.equal(blankStandardQuiz.reason, 'missing-offerid-requires-api-execution')
+    assert.equal(blankStandardQuiz.decision, 'auto')
+    assert.equal(blankStandardQuiz.reason, 'auto-executable-without-offerid')
 
     const blankUrlReward = opportunities.find((item) => item.title === 'Blank UrlReward')
     assert.ok(blankUrlReward)
     assert.equal(blankUrlReward.kind, 'urlreward')
-    assert.equal(blankUrlReward.decision, 'skip')
-    assert.equal(blankUrlReward.reason, 'missing-offerid-requires-api-execution')
+    assert.equal(blankUrlReward.decision, 'auto')
+    assert.equal(blankUrlReward.reason, 'auto-executable-without-offerid')
 })
 
 test('collectModernPanelOpportunities de-duplicates blank-offerId cards by opportunityKey', async () => {

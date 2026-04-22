@@ -79,11 +79,12 @@ export class Workers {
     }
 
     public async doAppPromotions(data: AppDashboardData) {
+        const dedicatedPromotionTypes = new Set(['checkin', 'msnreadearn'])
         const appRewards = data.response.promotions.filter(x => {
             if (x.attributes['complete']?.toLowerCase() !== 'false') return false
             if (!x.attributes['offerid']) return false
             if (!x.attributes['type']) return false
-            if (x.attributes['type'] !== 'sapphire') return false
+            if (dedicatedPromotionTypes.has(x.attributes['type'].toLowerCase())) return false
 
             return true
         })
@@ -106,7 +107,7 @@ export class Workers {
         this.bot.logger.info(this.bot.isMobile, 'APP-PROMOTIONS', '所有"应用推广"项目已完成')
     }
 
-    public async doSpecialPromotions(data: DashboardData) {
+    public async doSpecialPromotions(data: DashboardData, page: Page) {
         const specialPromotions: PurplePromotionalItem[] = [
             ...new Map(
                 [...(data.promotionalItems ?? [])]
@@ -115,17 +116,15 @@ export class Workers {
             ).values()
         ]
 
-        const supportedPromotions = ['ww_banner_optin_2x']
-
         const specialPromotionsUncompleted: PurplePromotionalItem[] =
             specialPromotions?.filter(x => {
                 if (x.complete) return false
                 if (x.exclusiveLockedFeatureStatus === 'locked') return false
                 if (!x.promotionType) return false
-
-                const offerId = (x.offerId ?? '').toLowerCase()
-                return supportedPromotions.some(s => offerId.includes(s))
+                return true
             }) ?? []
+
+        const genericPromotions: BasePromotion[] = []
 
         for (const activity of specialPromotionsUncompleted) {
             try {
@@ -151,17 +150,21 @@ export class Workers {
                             )
 
                             await this.bot.activities.doDoubleSearchPoints(activity)
+                        } else {
+                            genericPromotions.push(activity as unknown as BasePromotion)
                         }
+                        break
+                    }
+
+                    case 'quiz':
+                    case 'findclippy': {
+                        genericPromotions.push(activity as unknown as BasePromotion)
                         break
                     }
 
                     // 不支持的类型
                     default: {
-                        this.bot.logger.warn(
-                            this.bot.isMobile,
-                            'SPECIAL-ACTIVITY',
-                            `跳过活动 "${activity.title}" | offerId=${offerId} | 原因: 不支持的类型 "${activity.promotionType}"`
-                        )
+                        genericPromotions.push(activity as unknown as BasePromotion)
                         break
                     }
                 }
@@ -172,6 +175,10 @@ export class Workers {
                     `解决活动时出错 "${activity.title}" | 消息=${error instanceof Error ? error.message : String(error)}`
                 )
             }
+        }
+
+        if (genericPromotions.length) {
+            await this.solveActivities(genericPromotions, page)
         }
 
         this.bot.logger.info(this.bot.isMobile, 'SPECIAL-ACTIVITY', '所有"特殊活动"项目已完成')

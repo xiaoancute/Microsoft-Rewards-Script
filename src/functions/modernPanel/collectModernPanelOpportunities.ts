@@ -15,6 +15,7 @@ type LegacyOfferSources = Partial<
 
 interface PromotionLike {
     offerId?: unknown
+    name?: unknown
     title?: unknown
     promotionType?: unknown
     destinationUrl?: unknown
@@ -110,6 +111,10 @@ function hasPollScenarioDestination(promotion: PromotionLike): boolean {
     return !!destinationUrl && destinationUrl.toLowerCase().includes('pollscenarioid=')
 }
 
+function getName(promotion: PromotionLike): null | string {
+    return normalizeStringField(promotion.name, value => value.toLowerCase()).value
+}
+
 function isPollPromotion(promotion: PromotionLike): boolean {
     return getPromotionType(promotion) === 'quiz' && hasPollScenarioDestination(promotion)
 }
@@ -143,6 +148,10 @@ function isValidUrlRewardPromotion(promotion: PromotionLike): boolean {
 
 function isQuizPromotion(promotion: PromotionLike): boolean {
     return getPromotionType(promotion) === 'quiz'
+}
+
+function isExploreOnBingPromotion(promotion: PromotionLike): boolean {
+    return (getName(promotion) ?? '').includes('exploreonbing')
 }
 
 function isLockedPromotion(promotion: PromotionLike): boolean {
@@ -204,9 +213,30 @@ function classifyOpportunity(
     offerIdField: NormalizedStringField
 ): Pick<ModernPanelOpportunity, 'decision' | 'reason'> {
     if (source === ModernOpportunitySource.Daily) {
+        if (getComplete(promotion)) {
+            return {
+                decision: ModernOpportunityDecision.Skip,
+                reason: ModernOpportunityReason.UnsupportedPromotionType
+            }
+        }
+
+        if (isLockedPromotion(promotion)) {
+            return {
+                decision: ModernOpportunityDecision.Skip,
+                reason: ModernOpportunityReason.LockedFeature
+            }
+        }
+
+        if (hasPositiveActionability(promotion)) {
+            return {
+                decision: ModernOpportunityDecision.Auto,
+                reason: ModernOpportunityReason.AutoExecutable
+            }
+        }
+
         return {
             decision: ModernOpportunityDecision.Skip,
-            reason: ModernOpportunityReason.DailyCheckInWebEntryNotSupported
+            reason: ModernOpportunityReason.UnsupportedPromotionType
         }
     }
 
@@ -243,6 +273,24 @@ function classifyOpportunity(
         }
 
         if (isEightQuestionQuizPromotion(promotion) && hasValidDestination(promotion)) {
+            return {
+                decision: ModernOpportunityDecision.Auto,
+                reason: ModernOpportunityReason.AutoExecutableWithoutOfferId
+            }
+        }
+
+        if (isQuizPromotion(promotion) && hasValidDestination(promotion)) {
+            return {
+                decision: ModernOpportunityDecision.Auto,
+                reason: ModernOpportunityReason.AutoExecutableWithoutOfferId
+            }
+        }
+
+        if (
+            getPromotionType(promotion) === 'urlreward' &&
+            hasValidDestination(promotion) &&
+            !isExploreOnBingPromotion(promotion)
+        ) {
             return {
                 decision: ModernOpportunityDecision.Auto,
                 reason: ModernOpportunityReason.AutoExecutableWithoutOfferId

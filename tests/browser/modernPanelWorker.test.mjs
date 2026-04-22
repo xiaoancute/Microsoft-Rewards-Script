@@ -53,6 +53,12 @@ function createBot(overrides = {}) {
             }
         },
         activities: {
+            async doDailyCheckIn() {
+                dispatchCalls.push(['checkin'])
+            },
+            async doOpenUrlReward(promotion, page) {
+                dispatchCalls.push(['browser-urlreward', promotion.offerId, page])
+            },
             async doPoll(promotion, page) {
                 dispatchCalls.push(['poll', promotion.offerId, page])
             },
@@ -132,18 +138,19 @@ test('Workers.doModernPanelPromotions routes auto opportunities and logs skipped
     await workers.doModernPanelPromotions(panelData, dashboardData, page)
 
     assert.deepEqual(dispatchCalls, [
+        ['checkin'],
         ['poll', 'streak-poll-1', page],
         ['quiz', 'streak-quiz-1', page],
         ['urlreward', 'level-urlreward-1']
     ])
-    assert.equal(getWaitCalls(), 3)
-    assert.equal(getRandomDelayCalls(), 3)
+    assert.equal(getWaitCalls(), 4)
+    assert.equal(getRandomDelayCalls(), 4)
 
     const modernPanelSummaries = logs.filter((entry) => entry[1] === false && entry[2] === 'MODERN-PANEL')
     assert.ok(modernPanelSummaries.length >= 1)
     assert.match(modernPanelSummaries[0][3], /total=5/)
-    assert.match(modernPanelSummaries[0][3], /auto=3/)
-    assert.match(modernPanelSummaries[0][3], /skip=2/)
+    assert.match(modernPanelSummaries[0][3], /auto=4/)
+    assert.match(modernPanelSummaries[0][3], /skip=1/)
 
     const modernActivityLogs = logs
         .filter((entry) => entry[0] === 'info' && entry[1] === false && entry[2] === 'MODERN-ACTIVITY')
@@ -151,7 +158,7 @@ test('Workers.doModernPanelPromotions routes auto opportunities and logs skipped
 
     assert.equal(modernActivityLogs.length, 5)
     assert.ok(
-        modernActivityLogs.some((line) => line.includes('offerId=daily-checkin-1') && line.includes('decision=skip') && line.includes('reason=daily-check-in-web-entry-not-supported'))
+        modernActivityLogs.some((line) => line.includes('offerId=daily-checkin-1') && line.includes('decision=auto') && line.includes('reason=auto-executable'))
     )
     assert.ok(
         modernActivityLogs.some((line) => line.includes('offerId=level-info-1') && line.includes('decision=skip') && line.includes('reason=info-card-without-action'))
@@ -257,10 +264,11 @@ test('Workers.doModernPanelPromotions routes blank-offerId poll cards through br
     assert.match(modernActivityLogs[0], /opportunityKey=streak\|poll\|quiz\|https:\/\/rewards\.bing\.com\/task\?pollscenarioid=101\|blank poll\|unknown/)
 })
 
-test('Workers.doModernPanelPromotions keeps blank-offerId api-required quiz cards skipped', async () => {
+test('Workers.doModernPanelPromotions routes blank-offerId standard quiz cards through quiz execution', async () => {
     const Workers = await loadWorkers()
     const { bot, logs, dispatchCalls, getWaitCalls, getRandomDelayCalls } = createBot()
     const workers = new Workers(bot)
+    const page = { tag: 'modern-page' }
 
     await workers.doModernPanelPromotions(
         {
@@ -280,12 +288,12 @@ test('Workers.doModernPanelPromotions keeps blank-offerId api-required quiz card
             dailySetPromotions: {},
             morePromotionsWithoutPromotionalItems: []
         },
-        { tag: 'modern-page' }
+        page
     )
 
-    assert.deepEqual(dispatchCalls, [])
-    assert.equal(getWaitCalls(), 0)
-    assert.equal(getRandomDelayCalls(), 0)
+    assert.deepEqual(dispatchCalls, [['quiz', '   ', page]])
+    assert.equal(getWaitCalls(), 1)
+    assert.equal(getRandomDelayCalls(), 1)
 
     const modernActivityLogs = logs
         .filter((entry) => entry[0] === 'info' && entry[1] === false && entry[2] === 'MODERN-ACTIVITY')
@@ -293,8 +301,49 @@ test('Workers.doModernPanelPromotions keeps blank-offerId api-required quiz card
 
     assert.equal(modernActivityLogs.length, 1)
     assert.match(modernActivityLogs[0], /offerIdState=blank/)
-    assert.match(modernActivityLogs[0], /reason=missing-offerid-requires-api-execution/)
+    assert.match(modernActivityLogs[0], /reason=auto-executable-without-offerid/)
     assert.match(modernActivityLogs[0], /opportunityKey=streak\|quiz\|quiz\|https:\/\/rewards\.bing\.com\/quiz\/standard\|blank standard quiz\|unknown/)
+})
+
+test('Workers.doModernPanelPromotions routes blank-offerId urlreward cards through browser url visits', async () => {
+    const Workers = await loadWorkers()
+    const { bot, logs, dispatchCalls, getWaitCalls, getRandomDelayCalls } = createBot()
+    const workers = new Workers(bot)
+    const page = { tag: 'modern-page' }
+
+    await workers.doModernPanelPromotions(
+        {
+            flyoutResult: {
+                levelBenefitsPromotion: makePromotion({
+                    offerId: '   ',
+                    title: 'Blank UrlReward',
+                    promotionType: 'urlreward',
+                    destinationUrl: 'https://rewards.bing.com/level-benefits',
+                    pointProgressMax: 10,
+                    activityProgressMax: 10
+                })
+            }
+        },
+        {
+            morePromotions: [],
+            dailySetPromotions: {},
+            morePromotionsWithoutPromotionalItems: []
+        },
+        page
+    )
+
+    assert.deepEqual(dispatchCalls, [['browser-urlreward', '   ', page]])
+    assert.equal(getWaitCalls(), 1)
+    assert.equal(getRandomDelayCalls(), 1)
+
+    const modernActivityLogs = logs
+        .filter((entry) => entry[0] === 'info' && entry[1] === false && entry[2] === 'MODERN-ACTIVITY')
+        .map((entry) => entry[3])
+
+    assert.equal(modernActivityLogs.length, 1)
+    assert.match(modernActivityLogs[0], /offerIdState=blank/)
+    assert.match(modernActivityLogs[0], /reason=auto-executable-without-offerid/)
+    assert.match(modernActivityLogs[0], /opportunityKey=level\|urlreward\|urlreward\|https:\/\/rewards\.bing\.com\/level-benefits\|blank urlreward\|unknown/)
 })
 
 test('Workers.doModernPanelPromotions logs diagnostic state for unknown offer ids', async () => {

@@ -3,12 +3,16 @@ export interface BrowserEarnablePoints {
     mobileSearchPoints: number
     dailySetPoints: number
     morePromotionsPoints: number
+    punchCardPoints: number
+    specialPromotionsPoints: number
+    modernPanelPoints: number
     totalEarnablePoints: number
 }
 
 export interface AppEarnablePoints {
     readToEarn: number
     checkIn: number
+    appPromotionsPoints: number
     totalEarnablePoints: number
 }
 

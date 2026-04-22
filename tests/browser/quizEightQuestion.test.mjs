@@ -210,3 +210,37 @@ test('Quiz.doQuiz keeps ReportActivity flow for standard quizzes', async () => {
 
     assert.equal(requests, 2)
 })
+
+test('Quiz.doQuiz uses browser fallback for blank-offerId standard quizzes', async () => {
+    const Quiz = await loadQuiz()
+    const bot = createQuizBot()
+    let requests = 0
+    bot.axios.request = async () => {
+        requests++
+        return { status: 200 }
+    }
+
+    const quiz = new Quiz(bot)
+    let browserFlowCalls = 0
+    quiz.runBrowserQuiz = async function runBrowserQuiz() {
+        browserFlowCalls++
+        this.bot.userData.currentPoints = 110
+        this.bot.userData.gainedPoints = 10
+    }
+
+    await quiz.doQuiz(
+        {
+            offerId: '   ',
+            title: 'blank standard quiz',
+            promotionType: 'quiz',
+            pointProgressMax: 30,
+            activityProgressMax: 30,
+            destinationUrl: 'https://rewards.bing.com/quiz-standard'
+        },
+        { tag: 'page' }
+    )
+
+    assert.equal(browserFlowCalls, 1)
+    assert.equal(requests, 0)
+    assert.equal(bot.userData.currentPoints, 110)
+})
