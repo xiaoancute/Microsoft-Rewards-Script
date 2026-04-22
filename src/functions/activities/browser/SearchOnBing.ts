@@ -111,7 +111,7 @@ export class SearchOnBing extends Workers {
                 const cvid = randomBytes(16).toString('hex')
                 const url = `${this.bingHome}/search?q=${encodeURIComponent(query)}&PC=U531&FORM=ANNTA1&cvid=${cvid}`
 
-                await this.bot.mainMobilePage.goto(url)
+                await page.goto(url)
 
                 // 等待页面加载完成
                 await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {})

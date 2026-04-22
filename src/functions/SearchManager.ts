@@ -158,7 +158,7 @@ export class SearchManager {
                 )
                 searchTypes.push('Mobile')
                 promises.push(
-                    this.doMobileSearch(data, missingSearchPoints, mobileSession, accountEmail, executionContext).then(
+                    this.doMobileSearch(data, missingSearchPoints, mobileSession, account, accountEmail, executionContext).then(
                         points => {
                             mobileContextClosed = true
                             this.bot.logger.info('main', 'SEARCH-MANAGER', `移动端完成 | 获得=${points}`)
@@ -181,7 +181,7 @@ export class SearchManager {
                     'SEARCH-MANAGER',
                     `桌面端登录 | 账户=${accountEmail} | 代理=${account.proxy ?? 'none'}`
                 )
-                desktopSession = await executionContext.run({ isMobile: false, accountEmail }, async () =>
+                desktopSession = await executionContext.run({ isMobile: false, account }, async () =>
                     this.createDesktopSession(account, accountEmail)
                 )
                 this.bot.logger.info('main', 'SEARCH-MANAGER', '桌面端登录完成')
@@ -202,6 +202,7 @@ export class SearchManager {
                         data,
                         missingSearchPoints,
                         desktopSession,
+                        account,
                         accountEmail,
                         executionContext
                     ).then(points => {
@@ -248,7 +249,7 @@ export class SearchManager {
                 this.bot.logger.info('main', 'SEARCH-MANAGER', '清理：正在关闭移动端会话')
                 this.bot.logger.debug('main', 'SEARCH-MANAGER', `清理移动端 | 账户=${accountEmail}`)
                 try {
-                    await executionContext.run({ isMobile: true, accountEmail }, async () => {
+                    await executionContext.run({ isMobile: true, account }, async () => {
                         await this.bot.browser.func.closeBrowser(mobileSession.context, accountEmail)
                     })
                     this.bot.logger.info('main', 'SEARCH-MANAGER', '清理：移动端会话已关闭')
@@ -304,6 +305,7 @@ export class SearchManager {
                 data,
                 missingSearchPoints,
                 mobileSession,
+                account,
                 accountEmail,
                 executionContext
             )
@@ -313,7 +315,7 @@ export class SearchManager {
             this.bot.logger.info('main', 'SEARCH-MANAGER', `步骤 1: 跳过移动端 (${reason})；正在关闭移动端会话`)
             this.bot.logger.debug('main', 'SEARCH-MANAGER', '正在关闭未使用的移动端上下文')
             try {
-                await executionContext.run({ isMobile: true, accountEmail }, async () => {
+                await executionContext.run({ isMobile: true, account }, async () => {
                     await this.bot.browser.func.closeBrowser(mobileSession.context, accountEmail)
                 })
                 this.bot.logger.info('main', 'SEARCH-MANAGER', '未使用的移动端会话已关闭')
@@ -401,6 +403,7 @@ export class SearchManager {
         data: DashboardData,
         missingSearchPoints: MissingSearchPoints,
         mobileSession: BrowserSession,
+        account: Account,
         accountEmail: string,
         executionContext: any
     ): Promise<number> {
@@ -410,7 +413,7 @@ export class SearchManager {
             `开始 | 账户=${accountEmail} | 目标=${missingSearchPoints.mobilePoints}`
         )
 
-        return await executionContext.run({ isMobile: true, accountEmail }, async () => {
+        return await executionContext.run({ isMobile: true, account }, async () => {
             try {
                 if (!this.bot.config.workers.doMobileSearch) {
                     this.bot.logger.info('main', 'SEARCH-MOBILE-SEARCH', '跳过：配置中禁用了工作进程')
@@ -491,6 +494,7 @@ export class SearchManager {
         data: DashboardData,
         missingSearchPoints: MissingSearchPoints,
         desktopSession: BrowserSession,
+        account: Account,
         accountEmail: string,
         executionContext: any
     ): Promise<number> {
@@ -500,7 +504,7 @@ export class SearchManager {
             `开始 | 账户=${accountEmail} | 目标=${missingSearchPoints.desktopPoints}`
         )
 
-        return await executionContext.run({ isMobile: false, accountEmail }, async () => {
+        return await executionContext.run({ isMobile: false, account }, async () => {
             try {
                 this.bot.logger.info(
                     'main',
@@ -578,7 +582,7 @@ export class SearchManager {
             `开始 | 账户=${accountEmail} | 目标=${missingSearchPoints.desktopPoints}`
         )
 
-        return await executionContext.run({ isMobile: false, accountEmail }, async () => {
+        return await executionContext.run({ isMobile: false, account }, async () => {
             if (!this.bot.config.workers.doDesktopSearch) {
                 this.bot.logger.info('main', 'SEARCH-DESKTOP-SEQUENTIAL', '跳过：配置中禁用了工作进程')
                 return 0
