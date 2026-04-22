@@ -8,6 +8,7 @@ import type { BrowserFingerprintWithHeaders } from 'fingerprint-generator'
 import Browser from './browser/Browser'
 import BrowserFunc from './browser/BrowserFunc'
 import BrowserUtils from './browser/BrowserUtils'
+import { RiskControlDetectedError, type RiskControlDetection } from './browser/RiskControlDetector'
 
 import { IpcLog, IpcAlert, Logger } from './logging/Logger'
 import Utils from './util/Utils'
@@ -45,6 +46,10 @@ interface AccountStats {
     duration: number
     success: boolean
     error?: string
+}
+
+interface IpcRiskControlStop {
+    detection: RiskControlDetection
 }
 
 const executionContext = new AsyncLocalStorage<ExecutionContext>()
@@ -85,6 +90,7 @@ export class MicrosoftRewardsBot {
     public panelData!: PanelFlyoutData
 
     public rewardsVersion: 'legacy' | 'modern' = 'legacy'
+    public currentAccountEmail = ''
 
     public accessToken = '' // 访问令牌
     public requestToken = '' // 请求令牌
@@ -92,6 +98,7 @@ export class MicrosoftRewardsBot {
     public fingerprint!: BrowserFingerprintWithHeaders // 浏览器指纹
 
     private pointsCanCollect = 0 // 可收集的积分
+    private riskControlStopping = false
 
     private activeWorkers: number // 活跃的工作进程数
     private exitedWorkers: number[] // 已退出的工作进程PID数组
@@ -174,6 +181,25 @@ export class MicrosoftRewardsBot {
         await sendPushPlus(pushplus, content)
     }
 
+    beginRiskControlShutdown(detection: RiskControlDetection, workers: Worker[]): void {
+        if (this.riskControlStopping) {
+            return
+        }
+
+        this.riskControlStopping = true
+        this.logger.warn(
+            'main',
+            'RISK-CONTROL-SHUTDOWN',
+            `${detection.message} | selector=${detection.matchedSelector ?? 'none'} | text=${detection.matchedText ?? 'none'}`
+        )
+
+        for (const worker of workers) {
+            try {
+                worker.kill('SIGTERM')
+            } catch {}
+        }
+    }
+
     // 获取当前是否为移动端的上下文
     get isMobile(): boolean {
         return getCurrentContext().isMobile
@@ -239,7 +265,18 @@ export class MicrosoftRewardsBot {
             const worker = cluster.fork()
             worker.send?.({ chunk, runStartTime })
 
-            worker.on('message', (msg: { __ipcLog?: IpcLog; __ipcAlert?: IpcAlert; __stats?: AccountStats[] }) => {
+            worker.on('message', (msg: {
+                __ipcLog?: IpcLog
+                __ipcAlert?: IpcAlert
+                __stats?: AccountStats[]
+                __riskControlStop?: IpcRiskControlStop
+            }) => {
+                if (msg.__riskControlStop?.detection) {
+                    const workers = Object.values(cluster.workers ?? {}).filter(Boolean) as Worker[]
+                    this.beginRiskControlShutdown(msg.__riskControlStop.detection, workers)
+                    return
+                }
+
                 if (msg.__stats) {
                     allAccountStats.push(...msg.__stats)
                 }
@@ -352,6 +389,14 @@ export class MicrosoftRewardsBot {
                 await flushAllWebhooks()
                 process.exit(0)
             } catch (error) {
+                if (error instanceof RiskControlDetectedError) {
+                    process.send?.({
+                        __riskControlStop: {
+                            detection: error.detection
+                        }
+                    } as { __riskControlStop: IpcRiskControlStop })
+                }
+
                 this.logger.error(
                     'main',
                     'CLUSTER-WORKER-ERROR',
@@ -374,6 +419,7 @@ export class MicrosoftRewardsBot {
         for (const account of shuffled) {
             const accountStartTime = Date.now()
             const accountEmail = account.email
+            this.currentAccountEmail = accountEmail
             this.userData.userName = this.utils.getEmailUsername(accountEmail)
 
             try {
@@ -388,6 +434,10 @@ export class MicrosoftRewardsBot {
                 const result: { initialPoints: number; collectedPoints: number } | undefined = await this.Main(
                     account
                 ).catch(error => {
+                    if (error instanceof RiskControlDetectedError) {
+                        throw error
+                    }
+
                     void this.logger.error(
                         true,
                         'FLOW',
@@ -430,6 +480,10 @@ export class MicrosoftRewardsBot {
                     })
                 }
             } catch (error) {
+                if (error instanceof RiskControlDetectedError) {
+                    throw error
+                }
+
                 const durationSeconds = ((Date.now() - accountStartTime) / 1000).toFixed(1)
                 this.logger.error(
                     'main',
@@ -500,25 +554,11 @@ export class MicrosoftRewardsBot {
                 this.logger.info('main', 'BROWSER', `移动浏览器已启动 | ${accountEmail}`)
 
                 await this.login.login(this.mainMobilePage, account)
-
-                // 登录后、读 dashboard 前，主动检测 rewards dashboard 上的"账号被暂停"横幅。
-                // 登录流程里的 #serviceAbuseLandingTitle 只能捕获鉴权阶段，已登录但 rewards
-                // 被限制的账号会显示 #suspendedAccountHeader（见 constants.ts#SELECTORS）。
-                try {
-                    const suspended = await this.mainMobilePage
-                        .locator('#suspendedAccountHeader')
-                        .count()
-                        .then(n => n > 0)
-                        .catch(() => false)
-                    if (suspended) {
-                        const msg = `${accountEmail} 的 Rewards 账号被微软暂停，无法继续领积分`
-                        this.logger.alert('main', 'ACCOUNT-SUSPENDED', msg)
-                        throw new Error(msg)
-                    }
-                } catch (e) {
-                    // 只有 suspended=true 分支会 throw；其它异常（locator 查不到等）吞掉
-                    if (e instanceof Error && e.message.includes('暂停')) throw e
-                }
+                await this.browser.utils.assertNoRiskControlPrompt(
+                    this.mainMobilePage,
+                    'dashboard-after-login',
+                    accountEmail
+                )
 
                 try {
                     this.accessToken = await this.login.getAppAccessToken(this.mainMobilePage, accountEmail)
@@ -538,6 +578,13 @@ export class MicrosoftRewardsBot {
                 if (this.rewardsVersion !== 'modern' || !this.panelData) {
                     this.panelData = await this.browser.func.getPanelFlyoutData()
                 }
+
+                await this.browser.utils.assertNoRiskControlPrompt(
+                    this.mainMobilePage,
+                    'dashboard-after-load',
+                    accountEmail
+                )
+
                 // 设置地理位置
                 this.userData.geoLocale =
                     account.geoLocale === 'auto' ? data.userProfile.attributes.country : account.geoLocale.toLowerCase()
@@ -656,12 +703,16 @@ async function main(): Promise<void> {
         await rewardsBot.run()
     } catch (error) {
         rewardsBot.logger.error('main', 'MAIN-ERROR', error as Error)
+        await flushAllWebhooks()
+        process.exit(1)
     }
 }
 
-main().catch(async error => {
-    const tmpBot = new MicrosoftRewardsBot()
-    tmpBot.logger.error('main', 'MAIN-ERROR', error as Error)
-    await flushAllWebhooks()
-    process.exit(1)
-})
+if (require.main === module) {
+    main().catch(async error => {
+        const tmpBot = new MicrosoftRewardsBot()
+        tmpBot.logger.error('main', 'MAIN-ERROR', error as Error)
+        await flushAllWebhooks()
+        process.exit(1)
+    })
+}

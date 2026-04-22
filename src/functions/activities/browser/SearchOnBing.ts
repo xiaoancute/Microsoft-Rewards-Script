@@ -6,6 +6,7 @@ import path from 'path'
 
 import { Workers } from '../../Workers'
 import { QueryCore } from '../../QueryEngine'
+import { RiskControlDetectedError } from '../../../browser/RiskControlDetector'
 
 import type { BasePromotion } from '../../../interface/DashboardData'
 
@@ -81,6 +82,10 @@ export class SearchOnBing extends Workers {
                 )
             }
         } catch (error) {
+            if (error instanceof RiskControlDetectedError) {
+                throw error
+            }
+
             this.bot.logger.error(
                 this.bot.isMobile,
                 'SEARCH-ON-BING',
@@ -110,6 +115,11 @@ export class SearchOnBing extends Workers {
 
                 // 等待页面加载完成
                 await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {})
+                await this.bot.browser.utils.assertNoRiskControlPrompt(
+                    page,
+                    'search-on-bing-landing',
+                    this.bot.currentAccountEmail || 'unknown-account'
+                )
 
                 await this.bot.browser.utils.tryDismissAllMessages(page)
 
@@ -126,6 +136,11 @@ export class SearchOnBing extends Workers {
                 await page.keyboard.press('Enter')
 
                 await this.bot.utils.wait(this.bot.utils.randomDelay(5000, 7000))
+                await this.bot.browser.utils.assertNoRiskControlPrompt(
+                    page,
+                    'search-on-bing-results',
+                    this.bot.currentAccountEmail || 'unknown-account'
+                )
 
                 // 检查积分更新
                 const newBalance = await this.bot.browser.func.getCurrentPoints()
@@ -158,6 +173,10 @@ export class SearchOnBing extends Workers {
                     )
                 }
             } catch (error) {
+                if (error instanceof RiskControlDetectedError) {
+                    throw error
+                }
+
                 this.bot.logger.error(
                     this.bot.isMobile,
                     'SEARCH-ON-BING-SEARCH',

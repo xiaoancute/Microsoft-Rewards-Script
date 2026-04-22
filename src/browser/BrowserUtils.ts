@@ -3,6 +3,7 @@ import { CheerioAPI, load } from 'cheerio'
 import { ClickOptions, createCursor } from 'ghost-cursor-playwright-port'
 
 import type { MicrosoftRewardsBot } from '../index'
+import { detectRiskControlPrompt, RiskControlDetectedError } from './RiskControlDetector'
 
 export default class BrowserUtils {
     private bot: MicrosoftRewardsBot
@@ -209,6 +210,25 @@ export default class BrowserUtils {
         const html: string = typeof data === 'string' ? data : await data.content()
         const $ = load(html)
         return $
+    }
+
+    async assertNoRiskControlPrompt(page: Page, stage: string, accountEmail: string): Promise<void> {
+        if (this.bot.config.riskControlStop?.enabled === false) {
+            return
+        }
+
+        const detection = await detectRiskControlPrompt(page, { stage, accountEmail })
+        if (!detection) {
+            return
+        }
+
+        this.bot.logger.alert(
+            this.bot.isMobile,
+            'RISK-CONTROL-STOP',
+            `${detection.message} | selector=${detection.matchedSelector ?? 'none'} | text=${detection.matchedText ?? 'none'}`
+        )
+
+        throw new RiskControlDetectedError(detection)
     }
 
     async ghostClick(page: Page, selector: string, options?: ClickOptions): Promise<boolean> {

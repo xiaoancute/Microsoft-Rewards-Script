@@ -2,6 +2,7 @@ import type { AxiosRequestConfig } from 'axios'
 import type { BasePromotion } from '../../../interface/DashboardData'
 import type { Page } from 'patchright'
 import { Workers } from '../../Workers'
+import { RiskControlDetectedError } from '../../../browser/RiskControlDetector'
 
 const QUIZ_OPTION_SELECTORS = [
     'input[type="radio"]',
@@ -192,6 +193,10 @@ export class Quiz extends Workers {
                 )
             }
         } catch (error) {
+            if (error instanceof RiskControlDetectedError) {
+                throw error
+            }
+
             this.bot.logger.error(
                 this.bot.isMobile,
                 'QUIZ',
@@ -217,6 +222,12 @@ export class Quiz extends Workers {
                 )
             })
         }
+
+        await this.bot.browser.utils.assertNoRiskControlPrompt(
+            page,
+            'quiz-landing',
+            this.bot.currentAccountEmail || 'unknown-account'
+        )
 
         for (let questionIndex = 0; questionIndex < maxQuestionAttempts; questionIndex++) {
             let progressed = false
@@ -289,6 +300,12 @@ export class Quiz extends Workers {
                 )
             })
         }
+
+        await this.bot.browser.utils.assertNoRiskControlPrompt(
+            page,
+            'quiz-landing',
+            this.bot.currentAccountEmail || 'unknown-account'
+        )
 
         for (let questionIndex = 0; questionIndex < QUIZ_MAX_QUESTION_ATTEMPTS; questionIndex++) {
             let progressed = false

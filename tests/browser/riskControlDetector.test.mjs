@@ -69,3 +69,17 @@ test('detectRiskControlPrompt ignores ordinary rewards pages', async () => {
 
     assert.equal(hit, null)
 })
+
+test('detectRiskControlPrompt matches Chinese fallback text used on warning pages', async () => {
+    const { detectRiskControlPrompt } = await loadDetector()
+    const page = createPage({
+        content: '<html><body>由于异常行为，你的搜索积分目前受限。</body></html>'
+    })
+
+    const hit = await detectRiskControlPrompt(page, {
+        accountEmail: 'risk@example.com',
+        stage: 'search-after-run'
+    })
+
+    assert.match(hit?.matchedText ?? '', /异常行为|受限/)
+})

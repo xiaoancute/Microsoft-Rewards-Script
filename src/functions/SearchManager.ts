@@ -1,6 +1,7 @@
 import type { BrowserContext } from 'patchright'
 import type { BrowserFingerprintWithHeaders } from 'fingerprint-generator'
 import { MicrosoftRewardsBot, executionContext } from '../index'
+import { RiskControlDetectedError } from '../browser/RiskControlDetector'
 import type { DashboardData } from '../interface/DashboardData'
 import type { Account } from '../interface/Account'
 
@@ -378,6 +379,11 @@ export class SearchManager {
         this.bot.logger.debug('main', 'SEARCH-DESKTOP-LOGIN', '调用登录处理器')
 
         await this.bot['login'].login(this.bot.mainDesktopPage, account)
+        await this.bot.browser.utils.assertNoRiskControlPrompt(
+            this.bot.mainDesktopPage,
+            'dashboard-after-login',
+            accountEmail
+        )
 
         this.bot.logger.info('main', 'SEARCH-DESKTOP-LOGIN', '登录通过，正在验证')
         this.bot.logger.debug('main', 'SEARCH-DESKTOP-LOGIN', 'verifyBingSession')
@@ -422,8 +428,18 @@ export class SearchManager {
                     `搜索开始 | 目标=${missingSearchPoints.mobilePoints}`
                 )
                 this.bot.logger.debug('main', 'SEARCH-MOBILE-SEARCH', 'activities.doSearch (mobile)')
+                await this.bot.browser.utils.assertNoRiskControlPrompt(
+                    this.bot.mainMobilePage,
+                    'search-before-run',
+                    accountEmail
+                )
 
                 const pointsEarned = await this.bot.activities.doSearch(data, this.bot.mainMobilePage, true)
+                await this.bot.browser.utils.assertNoRiskControlPrompt(
+                    this.bot.mainMobilePage,
+                    'search-after-run',
+                    accountEmail
+                )
 
                 this.bot.logger.info(
                     'main',
@@ -438,6 +454,10 @@ export class SearchManager {
 
                 return pointsEarned
             } catch (error) {
+                if (error instanceof RiskControlDetectedError) {
+                    throw error
+                }
+
                 this.bot.logger.error(
                     'main',
                     'SEARCH-MOBILE-SEARCH',
@@ -487,7 +507,17 @@ export class SearchManager {
                     'SEARCH-DESKTOP-PARALLEL',
                     `搜索开始 | 目标=${missingSearchPoints.desktopPoints}`
                 )
+                await this.bot.browser.utils.assertNoRiskControlPrompt(
+                    this.bot.mainDesktopPage,
+                    'search-before-run',
+                    accountEmail
+                )
                 const pointsEarned = await this.bot.activities.doSearch(data, this.bot.mainDesktopPage, false)
+                await this.bot.browser.utils.assertNoRiskControlPrompt(
+                    this.bot.mainDesktopPage,
+                    'search-after-run',
+                    accountEmail
+                )
 
                 this.bot.logger.info(
                     'main',
@@ -502,6 +532,10 @@ export class SearchManager {
 
                 return pointsEarned
             } catch (error) {
+                if (error instanceof RiskControlDetectedError) {
+                    throw error
+                }
+
                 this.bot.logger.error(
                     'main',
                     'SEARCH-DESKTOP-PARALLEL',
@@ -565,8 +599,18 @@ export class SearchManager {
                     'SEARCH-DESKTOP-SEQUENTIAL',
                     `搜索开始 | 目标=${missingSearchPoints.desktopPoints}`
                 )
+                await this.bot.browser.utils.assertNoRiskControlPrompt(
+                    this.bot.mainDesktopPage,
+                    'search-before-run',
+                    accountEmail
+                )
 
                 const pointsEarned = await this.bot.activities.doSearch(data, this.bot.mainDesktopPage, false)
+                await this.bot.browser.utils.assertNoRiskControlPrompt(
+                    this.bot.mainDesktopPage,
+                    'search-after-run',
+                    accountEmail
+                )
 
                 this.bot.logger.info(
                     'main',
@@ -581,6 +625,10 @@ export class SearchManager {
 
                 return pointsEarned
             } catch (error) {
+                if (error instanceof RiskControlDetectedError) {
+                    throw error
+                }
+
                 this.bot.logger.error(
                     'main',
                     'SEARCH-DESKTOP-SEQUENTIAL',

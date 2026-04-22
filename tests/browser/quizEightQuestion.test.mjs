@@ -9,6 +9,7 @@ async function loadQuiz() {
 function createQuizBot() {
     return {
         isMobile: false,
+        currentAccountEmail: 'quiz@example.com',
         userData: {
             currentPoints: 100,
             gainedPoints: 0
@@ -29,6 +30,7 @@ function createQuizBot() {
                 }
             },
             utils: {
+                async assertNoRiskControlPrompt() {},
                 async ghostClick() {
                     return true
                 }

@@ -13,6 +13,7 @@ test('OpenUrlReward.doOpenUrlReward opens destination and confirms gained points
 
     const bot = {
         isMobile: false,
+        currentAccountEmail: 'open-url@example.com',
         userData: {
             currentPoints: 100,
             gainedPoints: 0
@@ -30,6 +31,9 @@ test('OpenUrlReward.doOpenUrlReward opens destination and confirms gained points
                     if (balanceReads === 1) return 100
                     return 110
                 }
+            },
+            utils: {
+                async assertNoRiskControlPrompt() {}
             }
         },
         utils: {

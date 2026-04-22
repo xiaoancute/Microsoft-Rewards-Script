@@ -19,6 +19,12 @@ export class OpenUrlReward extends Workers {
             await page.goto(destinationUrl).catch(() => {})
         }
 
+        await this.bot.browser.utils.assertNoRiskControlPrompt(
+            page,
+            'urlreward-landing',
+            this.bot.currentAccountEmail || 'unknown-account'
+        )
+
         for (let readAttempt = 0; readAttempt < URL_REWARD_CONFIRMATION_READS; readAttempt++) {
             await this.bot.utils.wait(this.bot.utils.randomDelay(1500, 3000))
 

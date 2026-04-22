@@ -19,6 +19,7 @@ function makeStandardQuizPromotion() {
 function createBot(overrides = {}) {
     return {
         isMobile: false,
+        currentAccountEmail: 'dispatch@example.com',
         logger: {
             info() {},
             debug() {},
@@ -232,6 +233,9 @@ test('Poll.doPoll opens destination, clicks first option, and refreshes points w
                     if (balanceReads === 1) return 100
                     return 110
                 }
+            },
+            utils: {
+                async assertNoRiskControlPrompt() {}
             }
         }
     })
@@ -282,6 +286,9 @@ test('Poll.doPoll retries click attempts when first confirmation cycle has no po
                     if (balanceReads < 4) return 100
                     return 110
                 }
+            },
+            utils: {
+                async assertNoRiskControlPrompt() {}
             }
         }
     })

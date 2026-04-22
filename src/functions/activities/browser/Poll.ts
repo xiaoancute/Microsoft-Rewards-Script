@@ -15,6 +15,12 @@ export class Poll extends Workers {
             await page.goto(destinationUrl).catch(() => {})
         }
 
+        await this.bot.browser.utils.assertNoRiskControlPrompt(
+            page,
+            'poll-landing',
+            this.bot.currentAccountEmail || 'unknown-account'
+        )
+
         for (const selector of POLL_OPTION_SELECTORS) {
             const options = page.locator(selector)
             const count = await options.count().catch(() => 0)
