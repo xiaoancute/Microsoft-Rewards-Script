@@ -14,6 +14,11 @@ export interface Config {
     webhook: ConfigWebhook
     /** 可选：安静时段。落在这个区间里启动时会等到区间外才开始（跨日也支持）。真人不会凌晨 3 点搜索。 */
     quietHours?: ConfigQuietHours
+    riskControlStop?: ConfigRiskControlStop
+}
+
+export interface ConfigRiskControlStop {
+    enabled: boolean
 }
 
 export interface ConfigQuietHours {

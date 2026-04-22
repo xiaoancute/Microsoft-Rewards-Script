@@ -48,6 +48,22 @@ export const SELECTORS = {
   QUIZ_CREDITS: 'span.rqMCredits'
 } as const
 
+export const RISK_CONTROL_SELECTORS = [
+  '#serviceAbuseLandingTitle',
+  '#suspendedAccountHeader'
+] as const
+
+export const RISK_CONTROL_TEXT_PATTERNS = [
+  'unusual activity',
+  'temporarily limited',
+  'earning limit',
+  'restricted',
+  'not following the rules',
+  '异常行为',
+  '暂停',
+  '受限'
+] as const
+
 export const URLS = {
   REWARDS_BASE: 'https://rewards.bing.com',
   REWARDS_SIGNIN: 'https://rewards.bing.com/signin',

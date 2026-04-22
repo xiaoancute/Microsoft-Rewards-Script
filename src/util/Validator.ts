@@ -95,6 +95,11 @@ export const ConfigSchema = z.object({
             start: z.string().regex(/^\d{1,2}:\d{2}$/, '需要 HH:MM 格式'),
             end: z.string().regex(/^\d{1,2}:\d{2}$/, '需要 HH:MM 格式')
         })
+        .optional(),
+    riskControlStop: z
+        .object({
+            enabled: z.boolean()
+        })
         .optional()
 })
 
