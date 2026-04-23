@@ -55,13 +55,16 @@ export const RISK_CONTROL_SELECTORS = [
 
 export const RISK_CONTROL_TEXT_PATTERNS = [
   'unusual activity',
+  'because of unusual activity',
+  'searches are temporarily limited',
   'temporarily limited',
   'earning limit',
-  'restricted',
   'not following the rules',
-  '异常行为',
-  '暂停',
-  '受限'
+  '由于异常行为',
+  '搜索积分目前受限',
+  '积分目前受限',
+  '帐户已被暂停',
+  '账户已被暂停'
 ] as const
 
 export const URLS = {

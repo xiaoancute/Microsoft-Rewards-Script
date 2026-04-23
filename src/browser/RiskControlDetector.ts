@@ -19,6 +19,16 @@ export class RiskControlDetectedError extends Error {
     }
 }
 
+function extractVisibleText(html: string): string {
+    return html
+        .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+        .replace(/<!--[\s\S]*?-->/g, ' ')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+}
+
 export async function detectRiskControlPrompt(
     page: Page,
     input: { accountEmail: string; stage: string }
@@ -42,7 +52,7 @@ export async function detectRiskControlPrompt(
     }
 
     const html = await page.content().catch(() => '')
-    const normalized = html.toLowerCase()
+    const normalized = extractVisibleText(html).toLowerCase()
 
     for (const pattern of RISK_CONTROL_TEXT_PATTERNS) {
         if (!normalized.includes(pattern.toLowerCase())) continue

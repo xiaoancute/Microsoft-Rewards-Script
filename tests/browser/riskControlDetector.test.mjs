@@ -83,3 +83,17 @@ test('detectRiskControlPrompt matches Chinese fallback text used on warning page
 
     assert.match(hit?.matchedText ?? '', /异常行为|受限/)
 })
+
+test('detectRiskControlPrompt ignores generic pause wording on ordinary pages', async () => {
+    const { detectRiskControlPrompt } = await loadDetector()
+    const page = createPage({
+        content: '<html><body><button>暂停</button><div>每日活动</div></body></html>'
+    })
+
+    const hit = await detectRiskControlPrompt(page, {
+        accountEmail: 'ok@example.com',
+        stage: 'dashboard-after-login'
+    })
+
+    assert.equal(hit, null)
+})
