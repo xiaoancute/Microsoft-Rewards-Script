@@ -519,7 +519,7 @@ export class MicrosoftRewardsBot {
             const hadWorkerFailure = accountStats.some(s => !s.success)
             await this.sendPushPlusSummary(accountStats, runStartTime, hadWorkerFailure)
             await flushAllWebhooks()
-            process.exit(0)
+            process.exit(hadWorkerFailure ? 1 : 0)
         }
 
         return accountStats

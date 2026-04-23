@@ -97,7 +97,9 @@ export default class BrowserUtils {
 
             const newTab = pages[pages.length - 1]
             if (!newTab) {
-                throw this.bot.logger.error(this.bot.isMobile, 'GET-NEW-TAB', '未找到标签页!')
+                const message = '未找到标签页!'
+                this.bot.logger.error(this.bot.isMobile, 'GET-NEW-TAB', message)
+                throw new Error(message)
             }
 
             return newTab

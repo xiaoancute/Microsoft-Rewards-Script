@@ -30,6 +30,7 @@ type LoginState =
     | 'OTP_CODE_ENTRY'
     | 'UNKNOWN'
     | 'CHROMEWEBDATA_ERROR'
+    | 'REWARDS_WELCOME'
 
 export class Login {
     emailLogin: EmailLogin
@@ -74,12 +75,36 @@ export class Login {
         this.recoveryLogin = new RecoveryLogin(this.bot)
     }
 
+    private getRewardsLoginUrl(): string {
+        return 'https://rewards.bing.com/createuser?idru=%2F&userScenarioId=anonsignin'
+    }
+
+    private isAnonymousRewardsPage(url: URL): boolean {
+        return url.hostname === 'rewards.bing.com' && (url.pathname === '/welcome' || url.pathname === '/createuser')
+    }
+
+    private isAuthenticatedRewardsPage(url: URL): boolean {
+        if (url.hostname === 'account.microsoft.com') {
+            return true
+        }
+
+        if (url.hostname !== 'rewards.bing.com') {
+            return false
+        }
+
+        return !this.isAnonymousRewardsPage(url)
+    }
+
+    private getRewardsDashboardUrl(): string {
+        return new URL('/dashboard', this.bot.config.baseURL).toString()
+    }
+
     async login(page: Page, account: Account) {
         try {
             this.bot.logger.info(this.bot.isMobile, 'LOGIN', '开始登录流程')
 
             await page
-                .goto('https://rewards.bing.com/createuser?idru=%2F&userScenarioId=anonsignin', {
+                .goto(this.getRewardsLoginUrl(), {
                     waitUntil: 'domcontentloaded'
                 })
                 .catch(() => {})
@@ -168,13 +193,18 @@ export class Login {
             return 'CHROMEWEBDATA_ERROR'
         }
 
+        if (url.hostname === 'rewards.bing.com' && url.pathname === '/welcome') {
+            this.bot.logger.debug(this.bot.isMobile, 'DETECT-STATE', '检测到 Rewards 匿名欢迎页')
+            return 'REWARDS_WELCOME'
+        }
+
         const isLocked = await this.checkSelector(page, this.selectors.accountLocked)
         if (isLocked) {
             this.bot.logger.debug(this.bot.isMobile, 'DETECT-STATE', '账户锁定选择器被发现')
             return 'ACCOUNT_LOCKED'
         }
 
-        if (url.hostname === 'rewards.bing.com' || url.hostname === 'account.microsoft.com') {
+        if (this.isAuthenticatedRewardsPage(url)) {
             this.bot.logger.debug(this.bot.isMobile, 'DETECT-STATE', '在奖励/账户页面，假设已登录')
             return 'LOGGED_IN'
         }
@@ -458,6 +488,19 @@ export class Login {
                 }
             }
 
+            case 'REWARDS_WELCOME': {
+                this.bot.logger.warn(this.bot.isMobile, 'LOGIN', '检测到 Rewards 欢迎页，重新进入登录入口')
+                await page
+                    .goto(this.getRewardsLoginUrl(), {
+                        waitUntil: 'domcontentloaded',
+                        timeout: 10000
+                    })
+                    .catch(() => {})
+                await this.bot.utils.wait(2000)
+                this.bot.logger.info(this.bot.isMobile, 'LOGIN', '已重新进入 Rewards 登录入口')
+                return true
+            }
+
             case '2FA_TOTP': {
                 this.bot.logger.info(this.bot.isMobile, 'LOGIN', '需要TOTP双因素认证')
                 await this.totp2FALogin.handle(page, account.totpSecret)
@@ -561,9 +604,9 @@ export class Login {
     private async finalizeLogin(page: Page, email: string) {
         this.bot.logger.info(this.bot.isMobile, 'LOGIN', '完成登录')
 
-        await page.goto(this.bot.config.baseURL, { waitUntil: 'networkidle', timeout: 10000 }).catch(() => {})
+        await page.goto(this.getRewardsDashboardUrl(), { waitUntil: 'networkidle', timeout: 10000 }).catch(() => {})
 
-        const loginRewardsSuccess = new URL(page.url()).hostname === 'rewards.bing.com'
+        const loginRewardsSuccess = this.isAuthenticatedRewardsPage(new URL(page.url()))
         if (loginRewardsSuccess) {
             this.bot.logger.info(this.bot.isMobile, 'LOGIN', '成功登录Microsoft Rewards')
         } else {
@@ -649,7 +692,7 @@ export class Login {
 
         try {
             await page
-                .goto(`${this.bot.config.baseURL}?_=${Date.now()}`, { waitUntil: 'networkidle', timeout: 10000 })
+                .goto(`${this.getRewardsDashboardUrl()}?_=${Date.now()}`, { waitUntil: 'networkidle', timeout: 10000 })
                 .catch(() => {})
 
             for (let i = 0; i < loopMax; i++) {
@@ -658,7 +701,7 @@ export class Login {
                 this.bot.logger.debug(this.bot.isMobile, 'GET-REWARD-SESSION', `令牌获取循环 ${i + 1}/${loopMax}`)
 
                 const u = new URL(page.url())
-                const atRewardHome = u.hostname === 'rewards.bing.com' && u.pathname === '/dashboard'
+                const atRewardHome = this.isAuthenticatedRewardsPage(u)
 
                 if (atRewardHome) {
                     await this.bot.browser.utils.tryDismissAllMessages(page)
@@ -718,11 +761,13 @@ export class Login {
                 '未找到RequestVerificationToken，某些活动可能无法工作'
             )
         } catch (error) {
-            throw this.bot.logger.error(
+            const message = `致命错误: ${error instanceof Error ? error.message : String(error)}`
+            this.bot.logger.error(
                 this.bot.isMobile,
                 'GET-REWARD-SESSION',
-                `致命错误: ${error instanceof Error ? error.message : String(error)}`
+                message
             )
+            throw new Error(message)
         }
     }
 

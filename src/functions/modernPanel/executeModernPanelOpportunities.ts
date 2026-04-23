@@ -1,6 +1,7 @@
 import type { Page } from 'patchright'
 import type { MicrosoftRewardsBot } from '../../index'
 import type { BasePromotion } from '../../interface/DashboardData'
+import { RiskControlDetectedError } from '../../browser/RiskControlDetector'
 import {
     ModernOpportunityDecision,
     ModernOpportunityKind,
@@ -92,6 +93,10 @@ export async function executeModernPanelOpportunities(
 
             await bot.utils.wait(bot.utils.randomDelay(5000, 15000))
         } catch (error) {
+            if (error instanceof RiskControlDetectedError) {
+                throw error
+            }
+
             bot.logger.error(
                 bot.isMobile,
                 'MODERN-ACTIVITY',

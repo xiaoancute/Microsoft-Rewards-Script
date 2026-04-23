@@ -6,16 +6,22 @@ import type { MicrosoftRewardsBot } from '../index'
 
 export class UserAgentManager {
     private static readonly NOT_A_BRAND_VERSION = '99'
+    private static readonly VERSION_REQUEST_TIMEOUT_MS = 8000
 
     constructor(private bot: MicrosoftRewardsBot) {}
 
     async getUserAgent(isMobile: boolean) {
+        const { userAgent, userAgentMetadata } = await this.resolveUserAgentData(isMobile)
+        return { userAgent, userAgentMetadata }
+    }
+
+    private async resolveUserAgentData(isMobile: boolean) {
         const system = this.getSystemComponents(isMobile)
-        const app = await this.getAppComponents(isMobile)
+        const componentData = await this.getAppComponents(isMobile)
 
         const uaTemplate = isMobile
-            ? `Mozilla/5.0 (${system}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${app.chrome_reduced_version} Mobile Safari/537.36 EdgA/${app.edge_version}`
-            : `Mozilla/5.0 (${system}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${app.chrome_reduced_version} Safari/537.36 Edg/${app.edge_version}`
+            ? `Mozilla/5.0 (${system}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${componentData.chrome_reduced_version} Mobile Safari/537.36 EdgA/${componentData.edge_version}`
+            : `Mozilla/5.0 (${system}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${componentData.chrome_reduced_version} Safari/537.36 Edg/${componentData.edge_version}`
 
         const platformVersion = `${isMobile ? Math.floor(Math.random() * 5) + 9 : Math.floor(Math.random() * 15) + 1}.0.0`
 
@@ -24,13 +30,13 @@ export class UserAgentManager {
             platform: isMobile ? 'Android' : 'Windows',
             fullVersionList: [
                 { brand: 'Not/A)Brand', version: `${UserAgentManager.NOT_A_BRAND_VERSION}.0.0.0` },
-                { brand: 'Microsoft Edge', version: app['edge_version'] },
-                { brand: 'Chromium', version: app['chrome_version'] }
+                { brand: 'Microsoft Edge', version: componentData.edge_version },
+                { brand: 'Chromium', version: componentData.chrome_version }
             ],
             brands: [
                 { brand: 'Not/A)Brand', version: UserAgentManager.NOT_A_BRAND_VERSION },
-                { brand: 'Microsoft Edge', version: app['edge_major_version'] },
-                { brand: 'Chromium', version: app['chrome_major_version'] }
+                { brand: 'Microsoft Edge', version: componentData.edge_major_version },
+                { brand: 'Chromium', version: componentData.chrome_major_version }
             ],
             platformVersion,
             architecture: isMobile ? '' : 'x86',
@@ -38,7 +44,7 @@ export class UserAgentManager {
             model: ''
         }
 
-        return { userAgent: uaTemplate, userAgentMetadata: uaMetadata }
+        return { userAgent: uaTemplate, userAgentMetadata: uaMetadata, componentData }
     }
 
     async getChromeVersion(isMobile: boolean): Promise<string> {
@@ -46,6 +52,7 @@ export class UserAgentManager {
             const request = {
                 url: 'https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions.json',
                 method: 'GET',
+                timeout: UserAgentManager.VERSION_REQUEST_TIMEOUT_MS,
                 headers: {
                     'Content-Type': 'application/json'
                 }
@@ -71,6 +78,7 @@ export class UserAgentManager {
             const request = {
                 url: 'https://edgeupdates.microsoft.com/api/products',
                 method: 'GET',
+                timeout: UserAgentManager.VERSION_REQUEST_TIMEOUT_MS,
                 headers: {
                     'Content-Type': 'application/json'
                 }
@@ -131,18 +139,17 @@ export class UserAgentManager {
         isMobile: boolean
     ): Promise<BrowserFingerprintWithHeaders> {
         try {
-            const userAgentData = await this.getUserAgent(isMobile)
-            const componentData = await this.getAppComponents(isMobile)
+            const { userAgent, userAgentMetadata, componentData } = await this.resolveUserAgentData(isMobile)
 
             //@ts-expect-error Errors due it not exactly matching
-            fingerprint.fingerprint.navigator.userAgentData = userAgentData.userAgentMetadata
-            fingerprint.fingerprint.navigator.userAgent = userAgentData.userAgent
-            fingerprint.fingerprint.navigator.appVersion = userAgentData.userAgent.replace(
+            fingerprint.fingerprint.navigator.userAgentData = userAgentMetadata
+            fingerprint.fingerprint.navigator.userAgent = userAgent
+            fingerprint.fingerprint.navigator.appVersion = userAgent.replace(
                 `${fingerprint.fingerprint.navigator.appCodeName}/`,
                 ''
             )
 
-            fingerprint.headers['user-agent'] = userAgentData.userAgent
+            fingerprint.headers['user-agent'] = userAgent
             fingerprint.headers['sec-ch-ua'] =
                 `"Microsoft Edge";v="${componentData.edge_major_version}", "Not=A?Brand";v="${componentData.not_a_brand_major_version}", "Chromium";v="${componentData.chrome_major_version}"`
             fingerprint.headers['sec-ch-ua-full-version-list'] =

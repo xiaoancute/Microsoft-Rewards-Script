@@ -11,6 +11,7 @@ import type { AppDashboardData } from '../interface/AppDashBoardData'
 import type { PanelFlyoutData } from '../interface/PanelFlyoutData'
 import { collectModernPanelOpportunities } from './modernPanel/collectModernPanelOpportunities'
 import { executeModernPanelOpportunities } from './modernPanel/executeModernPanelOpportunities'
+import { RiskControlDetectedError } from '../browser/RiskControlDetector'
 
 export class Workers {
     public bot: MicrosoftRewardsBot
@@ -329,6 +330,10 @@ export class Workers {
                 // 冷却时间
                 await this.bot.utils.wait(this.bot.utils.randomDelay(5000, 15000))
             } catch (error) {
+                if (error instanceof RiskControlDetectedError) {
+                    throw error
+                }
+
                 this.bot.logger.error(
                     this.bot.isMobile,
                     'ACTIVITY',
