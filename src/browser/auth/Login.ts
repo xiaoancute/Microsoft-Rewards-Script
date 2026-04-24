@@ -8,6 +8,7 @@ import { PasswordlessLogin } from './methods/PasswordlessLogin'
 import { TotpLogin } from './methods/Totp2FALogin'
 import { CodeLogin } from './methods/GetACodeLogin'
 import { RecoveryLogin } from './methods/RecoveryEmailLogin'
+import { waitForLoginPageSettled } from './methods/LoginUtils'
 
 import type { Account } from '../../interface/Account'
 
@@ -99,6 +100,16 @@ export class Login {
         return new URL('/dashboard', this.bot.config.baseURL).toString()
     }
 
+    private async waitForPageSettled(page: Page, context: string, timeout = 1500, pauseMs = 250) {
+        await waitForLoginPageSettled(page, {
+            bot: this.bot,
+            context,
+            tag: 'LOGIN',
+            timeoutMs: timeout,
+            pauseMs
+        })
+    }
+
     async login(page: Page, account: Account) {
         try {
             this.bot.logger.info(this.bot.isMobile, 'LOGIN', '开始登录流程')
@@ -108,11 +119,17 @@ export class Login {
                     waitUntil: 'domcontentloaded'
                 })
                 .catch(() => {})
-            await this.bot.utils.wait(2000)
+            await this.waitForPageSettled(page, '初始登录页加载', 2000, 400)
             await this.bot.browser.utils.reloadBadPage(page)
             await this.bot.browser.utils.disableFido(page)
 
             const maxIterations = 25
+            const recoveryLimits: Partial<Record<LoginState, number>> = {
+                CHROMEWEBDATA_ERROR: 3,
+                REWARDS_WELCOME: 3,
+                UNKNOWN: 6
+            }
+            const recoveryStateCounts: Partial<Record<LoginState, number>> = {}
             let iteration = 0
             let previousState: LoginState = 'UNKNOWN'
             let sameStateCount = 0
@@ -126,6 +143,30 @@ export class Login {
                 const state = await this.detectCurrentState(page, account)
                 this.bot.logger.debug(this.bot.isMobile, 'LOGIN', `当前状态: ${state}`)
 
+                const recoveryLimit = recoveryLimits[state]
+                if (recoveryLimit !== undefined) {
+                    const nextCount = (recoveryStateCounts[state] ?? 0) + 1
+                    recoveryStateCounts[state] = nextCount
+                    this.bot.logger.warn(
+                        this.bot.isMobile,
+                        'LOGIN',
+                        `恢复状态 ${state} 第 ${nextCount}/${recoveryLimit} 次`
+                    )
+
+                    if (nextCount > recoveryLimit) {
+                        const labels: Partial<Record<LoginState, string>> = {
+                            CHROMEWEBDATA_ERROR: 'chromewebdata 恢复循环',
+                            REWARDS_WELCOME: '欢迎页恢复次数过多',
+                            UNKNOWN: '未知状态恢复循环'
+                        }
+                        throw new Error(labels[state] ?? `${state} 恢复循环次数过多`)
+                    }
+                } else {
+                    recoveryStateCounts.CHROMEWEBDATA_ERROR = 0
+                    recoveryStateCounts.REWARDS_WELCOME = 0
+                    recoveryStateCounts.UNKNOWN = 0
+                }
+
                 if (state !== previousState && previousState !== 'UNKNOWN') {
                     this.bot.logger.info(this.bot.isMobile, 'LOGIN', `状态转换: ${previousState} → ${state}`)
                 }
@@ -137,6 +178,20 @@ export class Login {
                         'LOGIN',
                         `相同状态计数: ${sameStateCount}/4 状态为 "${state}"`
                     )
+                    if (sameStateCount === 3) {
+                        await this.waitForPageSettled(page, `状态 "${state}" 停滞后的轻量复检`, 1000, 150)
+                        const recheckedState = await this.detectCurrentState(page, account)
+                        if (recheckedState !== state) {
+                            this.bot.logger.info(
+                                this.bot.isMobile,
+                                'LOGIN',
+                                `轻量复检发现状态变化: ${state} → ${recheckedState}`
+                            )
+                            sameStateCount = 0
+                            previousState = 'UNKNOWN'
+                            continue
+                        }
+                    }
                     if (sameStateCount >= 4) {
                         this.bot.logger.warn(
                             this.bot.isMobile,
@@ -144,7 +199,7 @@ export class Login {
                             `在状态 "${state}" 停滞4次循环，刷新页面`
                         )
                         await page.reload({ waitUntil: 'domcontentloaded' })
-                        await this.bot.utils.wait(3000)
+                        await this.waitForPageSettled(page, '刷新页面后')
                         sameStateCount = 0
                         previousState = 'UNKNOWN'
                         continue
@@ -183,7 +238,7 @@ export class Login {
     }
 
     private async detectCurrentState(page: Page, account?: Account): Promise<LoginState> {
-        await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {})
+        await this.waitForPageSettled(page, '检测状态前', 1200, 150)
 
         const url = new URL(page.url())
         this.bot.logger.debug(this.bot.isMobile, 'DETECT-STATE', `当前URL: ${url.hostname}${url.pathname}`)
@@ -335,9 +390,7 @@ export class Login {
             case 'EMAIL_INPUT': {
                 this.bot.logger.info(this.bot.isMobile, 'LOGIN', '输入邮箱')
                 await this.emailLogin.enterEmail(page, account.email)
-                await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {
-                    this.bot.logger.debug(this.bot.isMobile, 'LOGIN', '邮箱输入后网络空闲超时')
-                })
+                await this.waitForPageSettled(page, '邮箱输入后')
                 this.bot.logger.info(this.bot.isMobile, 'LOGIN', '邮箱输入成功')
                 return true
             }
@@ -345,9 +398,7 @@ export class Login {
             case 'PASSWORD_INPUT': {
                 this.bot.logger.info(this.bot.isMobile, 'LOGIN', '输入密码')
                 await this.emailLogin.enterPassword(page, account.password)
-                await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {
-                    this.bot.logger.debug(this.bot.isMobile, 'LOGIN', '密码输入后网络空闲超时')
-                })
+                await this.waitForPageSettled(page, '密码输入后')
                 this.bot.logger.info(this.bot.isMobile, 'LOGIN', '密码输入成功')
                 return true
             }
@@ -363,13 +414,7 @@ export class Login {
                 if (otherWaysLink) {
                     this.bot.logger.info(this.bot.isMobile, 'LOGIN', '找到"其他登录方式"链接')
                     await this.bot.browser.utils.ghostClick(page, this.selectors.otherWaysToSignIn)
-                    await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {
-                        this.bot.logger.debug(
-                            this.bot.isMobile,
-                            'LOGIN',
-                            '点击其他方式后网络空闲超时'
-                        )
-                    })
+                    await this.waitForPageSettled(page, '点击其他登录方式后')
                     this.bot.logger.info(this.bot.isMobile, 'LOGIN', '"其他登录方式"已点击')
                     return true
                 }
@@ -381,9 +426,7 @@ export class Login {
 
                 if (footerLink) {
                     await this.bot.browser.utils.ghostClick(page, this.selectors.viewFooter)
-                    await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {
-                        this.bot.logger.debug(this.bot.isMobile, 'LOGIN', '页脚点击后网络空闲超时')
-                    })
+                    await this.waitForPageSettled(page, '点击页脚后')
                     this.bot.logger.info(this.bot.isMobile, 'LOGIN', '页脚链接已点击')
                     return true
                 }
@@ -396,9 +439,7 @@ export class Login {
                 if (backBtn) {
                     this.bot.logger.info(this.bot.isMobile, 'LOGIN', '未找到登录选项，点击返回按钮')
                     await this.bot.browser.utils.ghostClick(page, this.selectors.backButton)
-                    await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {
-                        this.bot.logger.debug(this.bot.isMobile, 'LOGIN', '返回按钮后网络空闲超时')
-                    })
+                    await this.waitForPageSettled(page, '点击返回按钮后')
                     return true
                 }
 
@@ -409,9 +450,7 @@ export class Login {
             case 'GET_A_CODE_2': {
                 this.bot.logger.info(this.bot.isMobile, 'LOGIN', '处理"获取代码"流程')
                 await this.bot.browser.utils.ghostClick(page, this.selectors.primaryButton)
-                await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {
-                    this.bot.logger.debug(this.bot.isMobile, 'LOGIN', '主按钮点击后网络空闲超时')
-                })
+                await this.waitForPageSettled(page, '点击主按钮后')
                 this.bot.logger.info(this.bot.isMobile, 'LOGIN', '启动代码登录处理器')
                 await this.codeLogin.handle(page)
                 this.bot.logger.info(this.bot.isMobile, 'LOGIN', '代码登录处理器完成')
@@ -441,9 +480,7 @@ export class Login {
                     `使用${emailSelector === this.selectors.emailIcon ? '新' : '旧'}邮箱图标选择器`
                 )
                 await this.bot.browser.utils.ghostClick(page, emailSelector)
-                await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {
-                    this.bot.logger.debug(this.bot.isMobile, 'LOGIN', '邮箱图标点击后网络空闲超时')
-                })
+                await this.waitForPageSettled(page, '点击邮箱验证图标后')
                 this.bot.logger.info(this.bot.isMobile, 'LOGIN', '启动代码登录处理器')
                 await this.codeLogin.handle(page)
                 this.bot.logger.info(this.bot.isMobile, 'LOGIN', '代码登录处理器完成')
@@ -452,9 +489,7 @@ export class Login {
 
             case 'RECOVERY_EMAIL_INPUT': {
                 this.bot.logger.info(this.bot.isMobile, 'LOGIN', '检测到恢复邮箱输入')
-                await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {
-                    this.bot.logger.debug(this.bot.isMobile, 'LOGIN', '恢复页面网络空闲超时')
-                })
+                await this.waitForPageSettled(page, '恢复邮箱页面加载')
                 this.bot.logger.info(this.bot.isMobile, 'LOGIN', '启动恢复邮箱处理器')
                 await this.recoveryLogin.handle(page, account?.recoveryEmail)
                 this.bot.logger.info(this.bot.isMobile, 'LOGIN', '恢复邮箱处理器完成')
@@ -471,7 +506,7 @@ export class Login {
                             timeout: 10000
                         })
                         .catch(() => {})
-                    await this.bot.utils.wait(3000)
+                    await this.waitForPageSettled(page, '恢复到 Rewards 页面', 2000, 400)
                     this.bot.logger.info(this.bot.isMobile, 'LOGIN', '恢复导航成功')
                     return true
                 } catch {
@@ -482,7 +517,7 @@ export class Login {
                             timeout: 10000
                         })
                         .catch(() => {})
-                    await this.bot.utils.wait(3000)
+                    await this.waitForPageSettled(page, '回退到 live.com 页面', 2000, 400)
                     this.bot.logger.info(this.bot.isMobile, 'LOGIN', '回退导航成功')
                     return true
                 }
@@ -496,7 +531,7 @@ export class Login {
                         timeout: 10000
                     })
                     .catch(() => {})
-                await this.bot.utils.wait(2000)
+                await this.waitForPageSettled(page, '重新进入 Rewards 登录入口', 2000, 400)
                 this.bot.logger.info(this.bot.isMobile, 'LOGIN', '已重新进入 Rewards 登录入口')
                 return true
             }
@@ -511,9 +546,7 @@ export class Login {
             case 'SIGN_IN_ANOTHER_WAY': {
                 this.bot.logger.info(this.bot.isMobile, 'LOGIN', '选择"使用我的密码"')
                 await this.bot.browser.utils.ghostClick(page, this.selectors.passwordIcon)
-                await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {
-                    this.bot.logger.debug(this.bot.isMobile, 'LOGIN', '密码图标点击后网络空闲超时')
-                })
+                await this.waitForPageSettled(page, '点击密码图标后')
                 this.bot.logger.info(this.bot.isMobile, 'LOGIN', '密码选项已选择')
                 return true
             }
@@ -521,9 +554,7 @@ export class Login {
             case 'KMSI_PROMPT': {
                 this.bot.logger.info(this.bot.isMobile, 'LOGIN', '接受KMSI提示')
                 await this.bot.browser.utils.ghostClick(page, this.selectors.primaryButton)
-                await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {
-                    this.bot.logger.debug(this.bot.isMobile, 'LOGIN', 'KMSI接受后网络空闲超时')
-                })
+                await this.waitForPageSettled(page, '接受 KMSI 后')
                 this.bot.logger.info(this.bot.isMobile, 'LOGIN', 'KMSI提示已接受')
                 return true
             }
@@ -532,9 +563,7 @@ export class Login {
             case 'PASSKEY_ERROR': {
                 this.bot.logger.info(this.bot.isMobile, 'LOGIN', '跳过Passkey提示')
                 await this.bot.browser.utils.ghostClick(page, this.selectors.secondaryButton)
-                await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {
-                    this.bot.logger.debug(this.bot.isMobile, 'LOGIN', 'Passkey跳过后网络空闲超时')
-                })
+                await this.waitForPageSettled(page, '跳过 Passkey 后')
                 this.bot.logger.info(this.bot.isMobile, 'LOGIN', 'Passkey提示已跳过')
                 return true
             }
@@ -542,9 +571,7 @@ export class Login {
             case 'LOGIN_PASSWORDLESS': {
                 this.bot.logger.info(this.bot.isMobile, 'LOGIN', '处理无密码认证')
                 await this.passwordlessLogin.handle(page)
-                await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {
-                    this.bot.logger.debug(this.bot.isMobile, 'LOGIN', '无密码认证后网络空闲超时')
-                })
+                await this.waitForPageSettled(page, '无密码认证后')
                 this.bot.logger.info(this.bot.isMobile, 'LOGIN', '无密码认证完成')
                 return true
             }
@@ -578,9 +605,7 @@ export class Login {
                     }
                 }
 
-                await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {
-                    this.bot.logger.debug(this.bot.isMobile, 'LOGIN', 'OTP导航后网络空闲超时')
-                })
+                await this.waitForPageSettled(page, 'OTP 页面导航后')
                 this.bot.logger.info(this.bot.isMobile, 'LOGIN', '从OTP输入页面返回')
                 return true
             }
@@ -604,7 +629,8 @@ export class Login {
     private async finalizeLogin(page: Page, email: string) {
         this.bot.logger.info(this.bot.isMobile, 'LOGIN', '完成登录')
 
-        await page.goto(this.getRewardsDashboardUrl(), { waitUntil: 'networkidle', timeout: 10000 }).catch(() => {})
+        await page.goto(this.getRewardsDashboardUrl(), { waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {})
+        await this.waitForPageSettled(page, '登录完成后进入仪表板', 2000, 300)
 
         const loginRewardsSuccess = this.isAuthenticatedRewardsPage(new URL(page.url()))
         if (loginRewardsSuccess) {
@@ -631,11 +657,15 @@ export class Login {
         const url =
             'https://www.bing.com/fd/auth/signin?action=interactive&provider=windows_live_id&return_url=https%3A%2F%2Fwww.bing.com%2F'
         const loopMax = 5
+        let sawLoginGate = false
+        let sawBingHome = false
+        let lastUrl = page.url()
 
         this.bot.logger.info(this.bot.isMobile, 'LOGIN-BING', '验证Bing会话')
 
         try {
-            await page.goto(url, { waitUntil: 'networkidle', timeout: 10000 }).catch(() => {})
+            await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {})
+            await this.waitForPageSettled(page, '开始验证 Bing 会话', 2000, 250)
 
             for (let i = 0; i < loopMax; i++) {
                 if (page.isClosed()) break
@@ -643,13 +673,18 @@ export class Login {
                 this.bot.logger.debug(this.bot.isMobile, 'LOGIN-BING', `验证循环 ${i + 1}/${loopMax}`)
 
                 const state = await this.detectCurrentState(page)
+                lastUrl = page.url()
                 if (state === 'PASSKEY_ERROR') {
                     this.bot.logger.info(this.bot.isMobile, 'LOGIN-BING', '忽略Passkey错误状态')
                     await this.bot.browser.utils.ghostClick(page, this.selectors.secondaryButton)
                 }
+                if (state !== 'UNKNOWN' && state !== 'LOGGED_IN') {
+                    sawLoginGate = true
+                }
 
                 const u = new URL(page.url())
                 const atBingHome = u.hostname === 'cn.bing.com' && u.pathname === '/'
+                sawBingHome = sawBingHome || atBingHome
                 this.bot.logger.debug(
                     this.bot.isMobile,
                     'LOGIN-BING',
@@ -675,7 +710,17 @@ export class Login {
                 await this.bot.utils.wait(1000)
             }
 
-            this.bot.logger.warn(this.bot.isMobile, 'LOGIN-BING', '无法验证Bing会话，仍然继续')
+            if (sawLoginGate) {
+                this.bot.logger.warn(this.bot.isMobile, 'LOGIN-BING', 'Bing 会话仍停留在登录流程，继续后续步骤')
+            } else if (!sawBingHome) {
+                this.bot.logger.warn(
+                    this.bot.isMobile,
+                    'LOGIN-BING',
+                    `未进入 Bing 首页，可能是网络或区域跳转问题 | 最后URL=${lastUrl}`
+                )
+            } else {
+                this.bot.logger.warn(this.bot.isMobile, 'LOGIN-BING', '无法验证Bing会话，仍然继续')
+            }
         } catch (error) {
             this.bot.logger.warn(
                 this.bot.isMobile,
@@ -687,13 +732,16 @@ export class Login {
 
     private async getRewardsSession(page: Page) {
         const loopMax = 5
+        let sawAuthenticatedRewardPage = false
+        let lastUrl = page.url()
 
         this.bot.logger.info(this.bot.isMobile, 'GET-REWARD-SESSION', '获取请求令牌')
 
         try {
             await page
-                .goto(`${this.getRewardsDashboardUrl()}?_=${Date.now()}`, { waitUntil: 'networkidle', timeout: 10000 })
+                .goto(`${this.getRewardsDashboardUrl()}?_=${Date.now()}`, { waitUntil: 'domcontentloaded', timeout: 10000 })
                 .catch(() => {})
+            await this.waitForPageSettled(page, '进入 Rewards 仪表板以获取令牌', 2000, 250)
 
             for (let i = 0; i < loopMax; i++) {
                 if (page.isClosed()) break
@@ -701,9 +749,11 @@ export class Login {
                 this.bot.logger.debug(this.bot.isMobile, 'GET-REWARD-SESSION', `令牌获取循环 ${i + 1}/${loopMax}`)
 
                 const u = new URL(page.url())
+                lastUrl = page.url()
                 const atRewardHome = this.isAuthenticatedRewardsPage(u)
 
                 if (atRewardHome) {
+                    sawAuthenticatedRewardPage = true
                     await this.bot.browser.utils.tryDismissAllMessages(page)
 
                     const html = await page.content()
@@ -726,6 +776,8 @@ export class Login {
                             'GET-REWARD-SESSION',
                             '本次会话已禁用 RequestToken（预期行为）。'
                         )
+
+                        return
                     }
 
                     const token =
@@ -758,7 +810,9 @@ export class Login {
             this.bot.logger.warn(
                 this.bot.isMobile,
                 'GET-REWARD-SESSION',
-                '未找到RequestVerificationToken，某些活动可能无法工作'
+                sawAuthenticatedRewardPage
+                    ? `已进入奖励页但未找到 RequestVerificationToken，可能是页面变体或短时加载问题 | 最后URL=${lastUrl}`
+                    : `未进入已登录的奖励页，可能是会话未完全建立 | 最后URL=${lastUrl}`
             )
         } catch (error) {
             const message = `致命错误: ${error instanceof Error ? error.message : String(error)}`

@@ -28,6 +28,7 @@
         </div>
         <nav class="tabs">
             <button class="tab active" data-tab="home">首页</button>
+            <button class="tab" data-tab="reports">收益报表</button>
             <button class="tab" data-tab="accounts">账号</button>
             <button class="tab" data-tab="sessions">Session</button>
             <button class="tab" data-tab="config">配置</button>
@@ -160,7 +161,7 @@
                     <button class="btn btn-primary" id="btn-save-config">保存</button>
                 </div>
             </div>
-            <p class="hint">改完保存后，下次运行立即生效。如果你是用 <code>npm start</code> 跑编译产物，仍需 <button class="inline-link" id="btn-build-from-config">重新构建</button>。</p>
+            <p class="hint">改完保存后，下次运行立即生效。只有代码改动时，才需要 <button class="inline-link" id="btn-build-from-config">重新构建</button>。</p>
             <form id="config-form"></form>
         </section>
 
@@ -262,6 +263,72 @@
                         </div>
                     </div>
                     <pre class="logbox" id="loghist-content"></pre>
+            </div>
+        </section>
+
+        <!-- 收益报表 -->
+        <section class="panel hidden" id="panel-reports">
+            <div class="panel-head">
+                <h2>收益报表</h2>
+                <div class="row-actions">
+                    <select id="reports-days" aria-label="报表范围">
+                        <option value="7">近 7 天</option>
+                        <option value="14">近 14 天</option>
+                        <option value="30">近 30 天</option>
+                        <option value="90">近 90 天</option>
+                    </select>
+                    <button class="btn btn-sm" id="btn-reports-refresh">刷新</button>
+                </div>
+            </div>
+            <p class="hint">每次脚本运行结束后会追加记录到 <code>reports/earnings.jsonl</code>，这里按天和账号做汇总。</p>
+            <div class="grid dash-grid">
+                <div class="card dash-card">
+                    <h3>总收益</h3>
+                    <div class="dash-big ok" id="reports-total-points">+0</div>
+                    <div class="dash-sub" id="reports-total-sub">暂无运行记录</div>
+                </div>
+                <div class="card dash-card">
+                    <h3>成功率</h3>
+                    <div class="dash-big" id="reports-success-rate">0%</div>
+                    <div class="dash-sub" id="reports-success-sub">—</div>
+                </div>
+                <div class="card dash-card">
+                    <h3>风控停止</h3>
+                    <div class="dash-big warn" id="reports-risk-count">0</div>
+                    <div class="dash-sub">命中后自动停止的运行次数</div>
+                </div>
+                <div class="card dash-card">
+                    <h3>总耗时</h3>
+                    <div class="dash-big" id="reports-duration">0秒</div>
+                    <div class="dash-sub" id="reports-duration-sub">累计账号执行耗时</div>
+                </div>
+            </div>
+            <div class="card">
+                <h3>每日收益</h3>
+                <div class="tablewrap">
+                    <table>
+                        <thead><tr><th>日期</th><th>运行</th><th>账号</th><th>收益</th><th>成功 / 失败</th><th>风控停止</th><th>耗时</th></tr></thead>
+                        <tbody id="reports-daily-tbody"><tr><td colspan="7" class="empty">暂无数据</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="card">
+                <h3>账号汇总</h3>
+                <div class="tablewrap">
+                    <table>
+                        <thead><tr><th>账号</th><th>运行</th><th>收益</th><th>成功 / 失败</th><th>风控停止</th><th>最近运行</th><th>最近错误</th></tr></thead>
+                        <tbody id="reports-account-tbody"><tr><td colspan="7" class="empty">暂无数据</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="card">
+                <h3>最近运行</h3>
+                <div class="tablewrap">
+                    <table>
+                        <thead><tr><th>开始时间</th><th>账号</th><th>收益</th><th>成功 / 失败</th><th>状态</th></tr></thead>
+                        <tbody id="reports-runs-tbody"><tr><td colspan="5" class="empty">暂无数据</td></tr></tbody>
+                    </table>
+                </div>
             </div>
         </section>
 

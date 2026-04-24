@@ -85,19 +85,15 @@ COPY --from=builder /usr/src/microsoft-rewards-script/node_modules ./node_module
 # when the user hasn't mounted their own config.json
 COPY src/config.example.json ./src/config.example.json
 
-# Create the config directory and symlink config.json and accounts.json into
-# dist/ so the app finds them at its expected paths, while the entrypoint
-# writes to dist/config/ which maps to the user-facing ./config/ volume mount
-RUN mkdir -p ./dist/config \
-    && ln -s /usr/src/microsoft-rewards-script/dist/config/config.json ./dist/config.json \
-    && ln -s /usr/src/microsoft-rewards-script/dist/config/accounts.json ./dist/accounts.json
+# Create stable user-facing directories for config and session data
+RUN mkdir -p ./config ./sessions
 
 # Copy runtime scripts with proper permissions from the start
 COPY --chmod=755 scripts/docker/run_daily.sh ./scripts/docker/run_daily.sh
 COPY --chmod=755 scripts/docker/run_daily_cron.sh ./scripts/docker/run_daily_cron.sh
 COPY --chmod=755 scripts/docker/log-forwarder.sh ./scripts/docker/log-forwarder.sh
 COPY --chmod=644 src/crontab.template /etc/cron.d/microsoft-rewards-cron.template
-COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY --chmod=755 scripts/docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 
 # Entrypoint handles TZ, accounts/config generation, initial run toggle,
 # cron templating & launch

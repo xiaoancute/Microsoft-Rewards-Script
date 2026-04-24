@@ -1,6 +1,19 @@
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import runtimePaths from '../runtime-paths.cjs'
+
+const {
+    getConfigCandidatePaths,
+    getAccountsCandidatePaths,
+    getCanonicalConfigPath,
+    getCanonicalAccountsPath,
+    getConfigExamplePath,
+    getAccountsExamplePath,
+    getCanonicalSessionDir,
+    getSessionCandidateDirs,
+    getSessionRootCandidates
+} = runtimePaths
 
 export function getDirname(importMetaUrl) {
     const __filename = fileURLToPath(importMetaUrl)
@@ -92,13 +105,7 @@ export function loadJsonFile(possiblePaths, required = true) {
 }
 
 export function loadConfig(projectRoot, isDev = false) {
-    const possiblePaths = isDev
-        ? [path.join(projectRoot, 'src', 'config.json')]
-        : [
-              path.join(projectRoot, 'src', 'config.json'),
-              path.join(projectRoot, 'dist', 'config.json'),
-              path.join(projectRoot, 'config.json')
-          ]
+    const possiblePaths = getConfigCandidatePaths(projectRoot)
 
     const result = loadJsonFile(possiblePaths, true)
 
@@ -119,14 +126,7 @@ export function loadConfig(projectRoot, isDev = false) {
 }
 
 export function loadAccounts(projectRoot, isDev = false) {
-    const possiblePaths = isDev
-        ? [path.join(projectRoot, 'src', 'accounts.dev.json')]
-        : [
-              path.join(projectRoot, 'src', 'accounts.json'),
-              path.join(projectRoot, 'dist', 'accounts.json'),
-              path.join(projectRoot, 'accounts.json'),
-              path.join(projectRoot, 'src', 'accounts.example.json')
-          ]
+    const possiblePaths = getAccountsCandidatePaths(projectRoot, isDev)
 
     return loadJsonFile(possiblePaths, true)
 }
@@ -143,8 +143,32 @@ export function getRuntimeBase(projectRoot, isDev = false) {
     return path.join(projectRoot, isDev ? 'src' : 'dist')
 }
 
-export function getSessionPath(runtimeBase, sessionPath, email) {
-    return path.join(runtimeBase, 'browser', sessionPath, email)
+export function getCanonicalConfigFile(projectRoot) {
+    return getCanonicalConfigPath(projectRoot)
+}
+
+export function getCanonicalAccountsFile(projectRoot, isDev = false) {
+    return getCanonicalAccountsPath(projectRoot, isDev)
+}
+
+export function getConfigExampleFile(projectRoot) {
+    return getConfigExamplePath(projectRoot)
+}
+
+export function getAccountsExampleFile(projectRoot) {
+    return getAccountsExamplePath(projectRoot)
+}
+
+export function getSessionPath(projectRoot, sessionPath, email) {
+    return getCanonicalSessionDir(projectRoot, sessionPath, email)
+}
+
+export function getSessionPathCandidates(projectRoot, sessionPath, email) {
+    return getSessionCandidateDirs(projectRoot, sessionPath, email)
+}
+
+export function getSessionRootPaths(projectRoot, sessionPath) {
+    return getSessionRootCandidates(projectRoot, sessionPath)
 }
 
 export async function loadCookies(sessionBase, type = 'desktop') {

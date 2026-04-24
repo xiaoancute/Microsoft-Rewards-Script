@@ -24,6 +24,7 @@ accounts.dev.json
 QWEN.md
 bun.lock
 logs/
+reports/
 .worktrees/
 .stfolder/
 .env

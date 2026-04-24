@@ -6,15 +6,15 @@ import path from 'node:path'
 
 import { getBrowserSessionState } from '../../scripts/main/browserSessionSupport.js'
 
-async function makeRuntimeBase() {
+async function makeProjectRoot() {
     return await fs.mkdtemp(path.join(os.tmpdir(), 'mrs-browser-session-'))
 }
 
 test('getBrowserSessionState allows first login without an existing session directory', async () => {
-    const runtimeBase = await makeRuntimeBase()
+    const projectRoot = await makeProjectRoot()
 
     const session = await getBrowserSessionState({
-        runtimeBase,
+        projectRoot,
         sessionPath: 'sessions',
         email: 'first@example.com',
         saveFingerprint: {
@@ -28,17 +28,17 @@ test('getBrowserSessionState allows first login without an existing session dire
     assert.equal(session.isMobile, false)
     assert.deepEqual(session.cookies, [])
     assert.equal(session.fingerprint, null)
-    assert.equal(session.sessionBase, path.join(runtimeBase, 'browser', 'sessions', 'first@example.com'))
+    assert.equal(session.sessionBase, path.join(projectRoot, 'sessions', 'first@example.com'))
 })
 
-test('getBrowserSessionState still reuses an existing mobile session', async () => {
-    const runtimeBase = await makeRuntimeBase()
-    const sessionBase = path.join(runtimeBase, 'browser', 'sessions', 'mobile@example.com')
+test('getBrowserSessionState prefers an existing root-level mobile session', async () => {
+    const projectRoot = await makeProjectRoot()
+    const sessionBase = path.join(projectRoot, 'sessions', 'mobile@example.com')
     await fs.mkdir(sessionBase, { recursive: true })
     await fs.writeFile(path.join(sessionBase, 'session_mobile.json'), JSON.stringify([{ name: 'MUID' }]))
 
     const session = await getBrowserSessionState({
-        runtimeBase,
+        projectRoot,
         sessionPath: 'sessions',
         email: 'mobile@example.com',
         saveFingerprint: {
@@ -51,4 +51,27 @@ test('getBrowserSessionState still reuses an existing mobile session', async () 
     assert.equal(session.sessionType, 'mobile')
     assert.equal(session.isMobile, true)
     assert.equal(session.cookies.length, 1)
+})
+
+test('getBrowserSessionState falls back to a legacy session directory but keeps the root session target', async () => {
+    const projectRoot = await makeProjectRoot()
+    const legacySessionBase = path.join(projectRoot, 'dist', 'browser', 'sessions', 'legacy@example.com')
+    await fs.mkdir(legacySessionBase, { recursive: true })
+    await fs.writeFile(path.join(legacySessionBase, 'session_mobile.json'), JSON.stringify([{ name: 'MUID' }]))
+
+    const session = await getBrowserSessionState({
+        projectRoot,
+        sessionPath: 'sessions',
+        email: 'legacy@example.com',
+        saveFingerprint: {
+            mobile: false,
+            desktop: false
+        }
+    })
+
+    assert.equal(session.isExistingSession, true)
+    assert.equal(session.sessionType, 'mobile')
+    assert.equal(session.isMobile, true)
+    assert.equal(session.cookies.length, 1)
+    assert.equal(session.sessionBase, path.join(projectRoot, 'sessions', 'legacy@example.com'))
 })

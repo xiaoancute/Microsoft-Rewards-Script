@@ -4,9 +4,19 @@ import type { BrowserFingerprintWithHeaders } from 'fingerprint-generator'
 import type { ChromeVersion, EdgeVersion } from '../interface/UserAgentUtil'
 import type { MicrosoftRewardsBot } from '../index'
 
+interface ResolvedBrowserVersions {
+    edgeVersions: {
+        android: string
+        windows: string
+    }
+    chromeVersion: string
+}
+
 export class UserAgentManager {
     private static readonly NOT_A_BRAND_VERSION = '99'
-    private static readonly VERSION_REQUEST_TIMEOUT_MS = 8000
+    private static readonly VERSION_REQUEST_TIMEOUT_MS = 4000
+    private static resolvedVersionsCache: ResolvedBrowserVersions | null = null
+    private static resolvedVersionsInFlight: Promise<ResolvedBrowserVersions> | null = null
 
     constructor(private bot: MicrosoftRewardsBot) {}
 
@@ -48,61 +58,55 @@ export class UserAgentManager {
     }
 
     async getChromeVersion(isMobile: boolean): Promise<string> {
-        try {
-            const request = {
-                url: 'https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions.json',
-                method: 'GET',
-                timeout: UserAgentManager.VERSION_REQUEST_TIMEOUT_MS,
-                headers: {
-                    'Content-Type': 'application/json'
-                }
-            }
-
-            const response = await axios(request)
-            const data: ChromeVersion = response.data
-            return data.channels.Stable.version
-        } catch (error) {
-            this.bot.logger.error(
-                isMobile,
-                'USERAGENT-CHROME-VERSION',
-                `发生错误: ${error instanceof Error ? error.message : String(error)}`
-            )
-            // throw error
-            return '144.0.7559.96'
-        }
-
+        return await this.runVersionRequest(
+            isMobile,
+            'USERAGENT-CHROME-VERSION',
+            async signal => {
+                const response = await axios({
+                    url: 'https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions.json',
+                    method: 'GET',
+                    timeout: UserAgentManager.VERSION_REQUEST_TIMEOUT_MS,
+                    signal,
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                })
+                const data: ChromeVersion = response.data
+                return data.channels.Stable.version
+            },
+            '144.0.7559.96'
+        )
     }
 
     async getEdgeVersions(isMobile: boolean) {
-        try {
-            const request = {
-                url: 'https://edgeupdates.microsoft.com/api/products',
-                method: 'GET',
-                timeout: UserAgentManager.VERSION_REQUEST_TIMEOUT_MS,
-                headers: {
-                    'Content-Type': 'application/json'
-                }
-            }
+        return await this.runVersionRequest(
+            isMobile,
+            'USERAGENT-EDGE-VERSION',
+            async signal => {
+                const response = await axios({
+                    url: 'https://edgeupdates.microsoft.com/api/products',
+                    method: 'GET',
+                    timeout: UserAgentManager.VERSION_REQUEST_TIMEOUT_MS,
+                    signal,
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                })
+                const data: EdgeVersion[] = response.data
+                const stable = data.find(x => x.Product == 'Stable') as EdgeVersion
 
-            const response = await axios(request)
-            const data: EdgeVersion[] = response.data
-            const stable = data.find(x => x.Product == 'Stable') as EdgeVersion
-            return {
-                android: stable.Releases.find(x => x.Platform == 'Android')?.ProductVersion,
-                windows: stable.Releases.find(x => x.Platform == 'Windows' && x.Architecture == 'x64')?.ProductVersion
-            }
-        } catch (error) {
-            this.bot.logger.error(
-                isMobile,
-                'USERAGENT-EDGE-VERSION',
-                `发生错误: ${error instanceof Error ? error.message : String(error)}`
-            )
-            // throw error
-            return {
+                return {
+                    android: stable.Releases.find(x => x.Platform == 'Android')?.ProductVersion ?? '144.0.3719.81',
+                    windows:
+                        stable.Releases.find(x => x.Platform == 'Windows' && x.Architecture == 'x64')?.ProductVersion ??
+                        '144.0.3719.82'
+                }
+            },
+            {
                 android: '144.0.3719.81',
                 windows: '144.0.3719.82'
             }
-        }
+        )
     }
 
     getSystemComponents(mobile: boolean): string {
@@ -115,11 +119,11 @@ export class UserAgentManager {
     }
 
     async getAppComponents(isMobile: boolean) {
-        const versions = await this.getEdgeVersions(isMobile)
-        const edgeVersion = isMobile ? versions.android : (versions.windows as string)
+        const versions = await this.getResolvedBrowserVersions(isMobile)
+        const edgeVersion = isMobile ? versions.edgeVersions.android : versions.edgeVersions.windows
         const edgeMajorVersion = edgeVersion?.split('.')[0]
 
-        const chromeVersion = await this.getChromeVersion(isMobile)
+        const chromeVersion = versions.chromeVersion
         const chromeMajorVersion = chromeVersion?.split('.')[0]
         const chromeReducedVersion = `${chromeMajorVersion}.0.0.0`
 
@@ -131,6 +135,59 @@ export class UserAgentManager {
             chrome_version: chromeVersion as string,
             chrome_major_version: chromeMajorVersion as string,
             chrome_reduced_version: chromeReducedVersion as string
+        }
+    }
+
+    private async getResolvedBrowserVersions(isMobile: boolean): Promise<ResolvedBrowserVersions> {
+        if (UserAgentManager.resolvedVersionsCache) {
+            return UserAgentManager.resolvedVersionsCache
+        }
+
+        if (!UserAgentManager.resolvedVersionsInFlight) {
+            UserAgentManager.resolvedVersionsInFlight = (async () => {
+                const [edgeVersions, chromeVersion] = await Promise.all([
+                    this.getEdgeVersions(isMobile),
+                    this.getChromeVersion(isMobile)
+                ])
+
+                const resolved = { edgeVersions, chromeVersion }
+                UserAgentManager.resolvedVersionsCache = resolved
+                return resolved
+            })().finally(() => {
+                UserAgentManager.resolvedVersionsInFlight = null
+            })
+        }
+
+        return await UserAgentManager.resolvedVersionsInFlight
+    }
+
+    private async runVersionRequest<T>(
+        isMobile: boolean,
+        logTag: string,
+        request: (signal: AbortSignal) => Promise<T>,
+        fallback: T
+    ): Promise<T> {
+        const controller = new AbortController()
+        let timeoutId: NodeJS.Timeout | undefined
+
+        const timeoutPromise = new Promise<never>((_, reject) => {
+            timeoutId = setTimeout(() => {
+                controller.abort()
+                reject(new Error(`request timed out after ${UserAgentManager.VERSION_REQUEST_TIMEOUT_MS}ms`))
+            }, UserAgentManager.VERSION_REQUEST_TIMEOUT_MS)
+        })
+
+        try {
+            return await Promise.race([request(controller.signal), timeoutPromise])
+        } catch (error) {
+            this.bot.logger.error(
+                isMobile,
+                logTag,
+                `发生错误: ${error instanceof Error ? error.message : String(error)}`
+            )
+            return fallback
+        } finally {
+            if (timeoutId) clearTimeout(timeoutId)
         }
     }
 
@@ -159,7 +216,7 @@ export class UserAgentManager {
             Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Mobile Safari/537.36 EdgA/129.0.0.0
             sec-ch-ua-full-version-list: "Microsoft Edge";v="129.0.2792.84", "Not=A?Brand";v="8.0.0.0", "Chromium";v="129.0.6668.90"
             sec-ch-ua: "Microsoft Edge";v="129", "Not=A?Brand";v="8", "Chromium";v="129"
-    
+
             Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36
             "Google Chrome";v="129.0.6668.90", "Not=A?Brand";v="8.0.0.0", "Chromium";v="129.0.6668.90"
             */

@@ -26,6 +26,7 @@ let state = {
     sessions: [],
     config: null,
     jobs: [],
+    reports: null,
     activeJobId: null,
     sse: null
 }
@@ -95,6 +96,7 @@ function switchTab(name) {
     // Re-fetch on tab open so user always sees fresh state
     if (name === 'home') loadDashboard()
     if (name === 'accounts') loadAccounts()
+    if (name === 'reports') loadReports()
     if (name === 'sessions') loadSessions()
     if (name === 'config') loadConfig()
     if (name === 'logs') loadJobs()
@@ -868,6 +870,125 @@ function appendLog(entry) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 收益报表 Tab
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function loadReports() {
+    const days = Number(document.getElementById('reports-days')?.value) || 7
+    try {
+        const report = await api('/api/reports/earnings?days=' + encodeURIComponent(days))
+        state.reports = report
+        renderReports(report)
+    } catch (err) {
+        toast('加载收益报表失败: ' + err.message, 'err')
+    }
+}
+
+function renderReports(report) {
+    const totals = report.totals || {}
+    document.getElementById('reports-total-points').textContent = formatPoints(totals.collectedPoints || 0)
+    document.getElementById('reports-total-sub').textContent = totals.runs
+        ? '近 ' + report.days + ' 天 · ' + totals.runs + ' 次运行 · ' + totals.accounts + ' 个账号结果'
+        : '暂无运行记录'
+    document.getElementById('reports-success-rate').textContent = Number(totals.successRate || 0).toFixed(1) + '%'
+    document.getElementById('reports-success-sub').textContent = totals.accounts
+        ? '失败账号结果: ' + (totals.failedAccounts || 0)
+        : '—'
+    document.getElementById('reports-risk-count').textContent = String(totals.riskControlStops || 0)
+    document.getElementById('reports-duration').textContent = formatDuration(totals.totalDuration || 0)
+
+    renderReportDaily(report.daily || [])
+    renderReportAccounts(report.accounts || [])
+    renderReportRuns(report.recentRuns || [])
+}
+
+function renderReportDaily(items) {
+    const tbody = document.getElementById('reports-daily-tbody')
+    if (!items.length) {
+        tbody.innerHTML = '<tr><td colspan="7" class="empty">暂无收益记录，脚本完整运行一次后会出现数据</td></tr>'
+        return
+    }
+    tbody.innerHTML = items.map(item => {
+        const risk = item.riskControlStops ? '<span class="badge warn">' + item.riskControlStops + '</span>' : '0'
+        return '<tr>' +
+            '<td>' + escapeHtml(item.date) + '</td>' +
+            '<td>' + (item.runs || 0) + '</td>' +
+            '<td>' + (item.accounts || 0) + '</td>' +
+            '<td><span class="badge ok">' + formatPoints(item.collectedPoints || 0) + '</span></td>' +
+            '<td>' + (item.successCount || 0) + ' / ' + (item.failedCount || 0) + '</td>' +
+            '<td>' + risk + '</td>' +
+            '<td>' + formatDuration(item.totalDuration || 0) + '</td>' +
+            '</tr>'
+    }).join('')
+}
+
+function renderReportAccounts(items) {
+    const tbody = document.getElementById('reports-account-tbody')
+    if (!items.length) {
+        tbody.innerHTML = '<tr><td colspan="7" class="empty">暂无账号汇总</td></tr>'
+        return
+    }
+    tbody.innerHTML = items.map(item => {
+        const risk = item.riskControlStops ? '<span class="badge warn">' + item.riskControlStops + '</span>' : '0'
+        const error = item.lastError ? '<span class="badge warn">' + escapeHtml(item.lastError) + '</span>' : '-'
+        return '<tr>' +
+            '<td>' + escapeHtml(item.email) + '</td>' +
+            '<td>' + (item.runs || 0) + '</td>' +
+            '<td><span class="badge ok">' + formatPoints(item.collectedPoints || 0) + '</span></td>' +
+            '<td>' + (item.successCount || 0) + ' / ' + (item.failedCount || 0) + '</td>' +
+            '<td>' + risk + '</td>' +
+            '<td>' + formatDateTime(item.lastRunAt) + '</td>' +
+            '<td>' + error + '</td>' +
+            '</tr>'
+    }).join('')
+}
+
+function renderReportRuns(items) {
+    const tbody = document.getElementById('reports-runs-tbody')
+    if (!items.length) {
+        tbody.innerHTML = '<tr><td colspan="5" class="empty">暂无运行记录</td></tr>'
+        return
+    }
+    tbody.innerHTML = items.map(item => {
+        const failed = item.hadWorkerFailure || item.failedCount > 0 || item.riskControlStopped
+        const status = item.riskControlStopped
+            ? '<span class="badge warn">风控停止</span>'
+            : failed
+                ? '<span class="badge warn">异常</span>'
+                : '<span class="badge ok">完成</span>'
+        return '<tr>' +
+            '<td>' + formatDateTime(item.startedAt) + '</td>' +
+            '<td>' + (item.accountCount || 0) + '</td>' +
+            '<td><span class="badge ok">' + formatPoints(item.totalCollectedPoints || 0) + '</span></td>' +
+            '<td>' + (item.successCount || 0) + ' / ' + (item.failedCount || 0) + '</td>' +
+            '<td>' + status + '</td>' +
+            '</tr>'
+    }).join('')
+}
+
+function formatPoints(value) {
+    const n = Number(value) || 0
+    return n >= 0 ? '+' + n : String(n)
+}
+
+function formatDuration(seconds) {
+    const n = Number(seconds) || 0
+    if (n < 60) return n.toFixed(0) + '秒'
+    if (n < 3600) return (n / 60).toFixed(1) + '分钟'
+    return (n / 3600).toFixed(1) + '小时'
+}
+
+function formatDateTime(value) {
+    if (!value) return '-'
+    const d = new Date(value)
+    if (Number.isNaN(d.getTime())) return '-'
+    return d.toLocaleString('zh-CN', { hour12: false })
+}
+
+document.getElementById('btn-reports-refresh')?.addEventListener('click', loadReports)
+document.getElementById('reports-days')?.addEventListener('change', loadReports)
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Utils
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -899,7 +1020,7 @@ const ACTION_DESCRIPTIONS = {
     'install-chromium': '跑 npx patchright install chromium，重新下载浏览器二进制。',
     'install-deps': '以当前发行版的包管理器装 Chromium 需要的系统库（需 sudo）。',
     'npm-install': '重新安装 node_modules。',
-    'build': '编译 TypeScript 到 dist/，改完 JSON 后必须跑。',
+    'build': '编译 TypeScript 到 dist/，只有代码改动后才需要跑。',
     upgrade: 'git pull --ff-only → npm install → npm run build，把整个项目升到最新。'
 }
 

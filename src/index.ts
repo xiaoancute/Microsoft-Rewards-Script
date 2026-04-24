@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
+import path from 'node:path'
 import cluster, { Worker } from 'cluster'
 import type { BrowserContext, Cookie, Page } from 'patchright'
 import pkg from '../package.json'
@@ -28,6 +29,20 @@ import { sendPushPlus, flushPushPlusQueue } from './logging/PushPlus'
 import type { DashboardData } from './interface/DashboardData'
 import type { AppDashboardData } from './interface/AppDashBoardData'
 import { PanelFlyoutData } from './interface/PanelFlyoutData'
+
+const PROJECT_ROOT = path.resolve(__dirname, '..')
+const { appendEarningsRun } = require('../earnings-report.cjs') as {
+    appendEarningsRun: (
+        projectRoot: string,
+        input: {
+            runStartedAt: number
+            runFinishedAt: number
+            accountStats: AccountStats[]
+            hadWorkerFailure?: boolean
+            riskControlStopped?: boolean
+        }
+    ) => Promise<unknown>
+}
 interface ExecutionContext {
     isMobile: boolean
     account: Account
@@ -46,6 +61,7 @@ interface AccountStats {
     duration: number
     success: boolean
     error?: string
+    riskControlStopped?: boolean
 }
 
 interface IpcRiskControlStop {
@@ -179,6 +195,29 @@ export class MicrosoftRewardsBot {
 
         const content = this.buildSummaryMessage(accountStats, runStartTime, hadWorkerFailure)
         await sendPushPlus(pushplus, content)
+    }
+
+    private async appendEarningsReport(
+        accountStats: AccountStats[],
+        runStartTime: number,
+        hadWorkerFailure: boolean
+    ): Promise<void> {
+        try {
+            await appendEarningsRun(PROJECT_ROOT, {
+                runStartedAt: runStartTime,
+                runFinishedAt: Date.now(),
+                accountStats,
+                hadWorkerFailure,
+                riskControlStopped: this.riskControlStopping
+            })
+            this.logger.info('main', 'EARNINGS-REPORT', '收益报表已写入 reports/earnings.jsonl')
+        } catch (error) {
+            this.logger.warn(
+                'main',
+                'EARNINGS-REPORT',
+                `收益报表写入失败: ${error instanceof Error ? error.message : String(error)}`
+            )
+        }
     }
 
     beginRiskControlShutdown(detection: RiskControlDetection, workers: Worker[]): void {
@@ -352,6 +391,7 @@ export class MicrosoftRewardsBot {
                     'green'
                 )
 
+                await this.appendEarningsReport(allAccountStats, runStartTime, hadWorkerFailure)
                 await this.sendPushPlusSummary(allAccountStats, runStartTime, hadWorkerFailure)
                 await flushAllWebhooks()
 
@@ -517,6 +557,7 @@ export class MicrosoftRewardsBot {
             )
 
             const hadWorkerFailure = accountStats.some(s => !s.success)
+            await this.appendEarningsReport(accountStats, runStartTime, hadWorkerFailure)
             await this.sendPushPlusSummary(accountStats, runStartTime, hadWorkerFailure)
             await flushAllWebhooks()
             process.exit(hadWorkerFailure ? 1 : 0)

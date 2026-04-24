@@ -1,5 +1,6 @@
 import type { Page } from 'patchright'
 import type { MicrosoftRewardsBot } from '../../../index'
+import { getErrorMessage, waitForLoginPageSettled } from './LoginUtils'
 
 export class PasswordlessLogin {
     private readonly maxAttempts = 60
@@ -28,6 +29,7 @@ export class PasswordlessLogin {
 
     private async waitForApproval(page: Page): Promise<boolean> {
         try {
+            const initialUrl = page.url()
             this.bot.logger.info(
                 this.bot.isMobile,
                 'LOGIN-PASSWORDLESS',
@@ -38,6 +40,22 @@ export class PasswordlessLogin {
                 const currentUrl = new URL(page.url())
                 if (currentUrl.pathname === this.approvalPath) {
                     this.bot.logger.info(this.bot.isMobile, 'LOGIN-PASSWORDLESS', '检测到批准')
+                    return true
+                }
+
+                const errorMessage = await getErrorMessage(page)
+                if (errorMessage) {
+                    this.bot.logger.warn(this.bot.isMobile, 'LOGIN-PASSWORDLESS', `等待批准时出现错误: ${errorMessage}`)
+                    return false
+                }
+
+                const promptStillVisible = await page
+                    .waitForSelector(this.numberDisplaySelector, { state: 'visible', timeout: 200 })
+                    .then(() => true)
+                    .catch(() => false)
+
+                if (page.url() !== initialUrl || !promptStillVisible) {
+                    this.bot.logger.info(this.bot.isMobile, 'LOGIN-PASSWORDLESS', '检测到页面状态变化，视为已批准')
                     return true
                 }
 
@@ -95,7 +113,13 @@ export class PasswordlessLogin {
 
             if (approved) {
                 this.bot.logger.info(this.bot.isMobile, 'LOGIN-PASSWORDLESS', '登录批准成功')
-                await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {})
+                await waitForLoginPageSettled(page, {
+                    bot: this.bot,
+                    context: '无密码登录批准后',
+                    tag: 'LOGIN-PASSWORDLESS',
+                    timeoutMs: 1500,
+                    pauseMs: 150
+                })
             } else {
                 this.bot.logger.error(this.bot.isMobile, 'LOGIN-PASSWORDLESS', '登录批准失败或超时')
                 throw new Error('无密码身份验证超时')

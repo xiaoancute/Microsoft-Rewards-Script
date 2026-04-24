@@ -3,6 +3,13 @@ import { randomBytes } from 'crypto'
 import { URLSearchParams } from 'url'
 
 import type { MicrosoftRewardsBot } from '../../../index'
+import { getErrorMessage, waitForLoginPageSettled } from './LoginUtils'
+
+type OAuthState =
+    | { kind: 'error'; message: string }
+    | { kind: 'passkey' }
+    | { kind: 'success'; code: string }
+    | { kind: 'waiting' }
 
 export class MobileAccessLogin {
     private clientId = '0000000040170455'
@@ -39,11 +46,53 @@ export class MobileAccessLogin {
             if (hasPasskeyError || hasPasskeyVideo) {
                 this.bot.logger.info(this.bot.isMobile, 'LOGIN-APP', '在OAuth页面上发现Passkey提示，跳过')
                 await this.bot.browser.utils.ghostClick(this.page, this.selectors.secondaryButton)
-                await this.page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {})
+                await waitForLoginPageSettled(this.page, {
+                    bot: this.bot,
+                    context: 'OAuth Passkey 跳过后',
+                    tag: 'LOGIN-APP',
+                    timeoutMs: 1500,
+                    pauseMs: 150
+                })
             }
         } catch {
             // 忽略提示处理中的错误
         }
+    }
+
+    private async inspectOAuthState(): Promise<OAuthState> {
+        const currentUrl = this.page.url()
+
+        try {
+            const url = new URL(currentUrl)
+
+            if (url.hostname === 'login.live.com' && url.pathname === '/oauth20_desktop.srf') {
+                const code = url.searchParams.get('code') || ''
+                if (code) {
+                    return { kind: 'success', code }
+                }
+
+                const error =
+                    url.searchParams.get('error_description') || url.searchParams.get('error') || ''
+                if (error) {
+                    return { kind: 'error', message: error }
+                }
+            }
+        } catch {
+            this.bot.logger.debug(this.bot.isMobile, 'LOGIN-APP', `轮询期间URL无效: ${String(currentUrl)}`)
+        }
+
+        const errorMessage = await getErrorMessage(this.page)
+        if (errorMessage) {
+            return { kind: 'error', message: errorMessage }
+        }
+
+        const hasPasskeyError = await this.checkSelector(this.selectors.passKeyError)
+        const hasPasskeyVideo = await this.checkSelector(this.selectors.passKeyVideo)
+        if (hasPasskeyError || hasPasskeyVideo) {
+            return { kind: 'passkey' }
+        }
+
+        return { kind: 'waiting' }
     }
 
     async get(email: string): Promise<string> {
@@ -90,26 +139,20 @@ export class MobileAccessLogin {
                     lastUrl = currentUrl
                 }
 
-                try {
-                    const url = new URL(currentUrl)
+                const state = await this.inspectOAuthState()
+                if (state.kind === 'success') {
+                    code = state.code
+                    this.bot.logger.debug(this.bot.isMobile, 'LOGIN-APP', '在重定向URL中检测到OAuth代码')
+                    break
+                }
 
-                    if (url.hostname === 'login.live.com' && url.pathname === '/oauth20_desktop.srf') {
-                        code = url.searchParams.get('code') || ''
+                if (state.kind === 'error') {
+                    this.bot.logger.warn(this.bot.isMobile, 'LOGIN-APP', `OAuth 重定向返回错误: ${state.message}`)
+                    return ''
+                }
 
-                        if (code) {
-                            this.bot.logger.debug(this.bot.isMobile, 'LOGIN-APP', '在重定向URL中检测到OAuth代码')
-                            break
-                        }
-                    }
-
-                    // 如果出现Passkey提示则处理
+                if (state.kind === 'passkey') {
                     await this.handlePasskeyPrompt()
-                } catch (err) {
-                    this.bot.logger.debug(
-                        this.bot.isMobile,
-                        'LOGIN-APP',
-                        `轮询期间URL无效: ${String(currentUrl)}`
-                    )
                 }
 
                 await this.bot.utils.wait(1000)

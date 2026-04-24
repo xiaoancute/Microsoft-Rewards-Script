@@ -2,6 +2,7 @@ import http from 'http'
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import { createRequire } from 'module'
 
 import { createRunner } from './runner.js'
 import {
@@ -39,6 +40,8 @@ import {
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
+const require = createRequire(import.meta.url)
+const { readEarningsReport } = require('../../earnings-report.cjs')
 const projectRoot = findProjectRoot(__dirname)
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -197,6 +200,12 @@ async function handleApi(req, res, url) {
     // GET /api/status
     if (method === 'GET' && pathname === '/api/status') {
         return sendJson(res, 200, getStatus(projectRoot, runner))
+    }
+
+    // Reports
+    if (method === 'GET' && pathname === '/api/reports/earnings') {
+        const days = Number(searchParams.get('days')) || 7
+        return sendJson(res, 200, readEarningsReport(projectRoot, { days }))
     }
 
     // Accounts

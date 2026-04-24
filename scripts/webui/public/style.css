@@ -201,6 +201,15 @@ main {
     margin-bottom: 14px;
 }
 
+.panel-head select {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 4px 10px;
+    border-radius: 6px;
+    font: inherit;
+}
+
 .hint {
     color: var(--text-muted);
     margin: 0 0 16px;

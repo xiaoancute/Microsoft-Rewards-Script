@@ -2,6 +2,15 @@ import fs from 'fs'
 import path from 'path'
 import os from 'os'
 import { execFileSync } from 'child_process'
+import runtimePaths from '../../runtime-paths.cjs'
+
+const {
+    getCanonicalAccountsPath,
+    getCanonicalConfigPath,
+    getAccountsCandidatePaths,
+    getConfigCandidatePaths,
+    getSessionRootCandidates
+} = runtimePaths
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 环境诊断 —— 纯只读。返回一组 check，每项 { name, ok, value, hint }
@@ -54,6 +63,22 @@ function checkNode() {
     }
 }
 
+function readFirstExistingJson(possiblePaths) {
+    for (const filePath of possiblePaths) {
+        if (!fs.existsSync(filePath)) continue
+        try {
+            return { data: JSON.parse(fs.readFileSync(filePath, 'utf8')), path: filePath }
+        } catch (error) {
+            return { error, path: filePath }
+        }
+    }
+    return null
+}
+
+function relativePath(projectRoot, filePath) {
+    return path.relative(projectRoot, filePath) || path.basename(filePath)
+}
+
 function checkDistBuilt(projectRoot) {
     const builtPath = path.join(projectRoot, 'dist', 'index.js')
     const exists = fs.existsSync(builtPath)
@@ -66,32 +91,47 @@ function checkDistBuilt(projectRoot) {
 }
 
 function checkAccounts(projectRoot) {
-    const p = path.join(projectRoot, 'src', 'accounts.json')
-    if (!fs.existsSync(p)) {
+    const canonical = getCanonicalAccountsPath(projectRoot)
+    const result = readFirstExistingJson(getAccountsCandidatePaths(projectRoot, false))
+    if (!result) {
         return { name: 'accounts.json', ok: false, value: '未创建', hint: '到「账号」Tab 添加第一个账号。' }
     }
-    try {
-        const raw = JSON.parse(fs.readFileSync(p, 'utf8'))
-        const count = Array.isArray(raw) ? raw.length : 0
-        return {
-            name: 'accounts.json',
-            ok: count > 0,
-            value: `${count} 个账号`,
-            hint: count === 0 ? '文件为空，到「账号」Tab 添加账号。' : null
-        }
-    } catch (e) {
-        return { name: 'accounts.json', ok: false, value: '解析失败', hint: e.message }
+    if (result.error) {
+        return { name: 'accounts.json', ok: false, value: '解析失败', hint: result.error.message }
+    }
+
+    const count = Array.isArray(result.data) ? result.data.length : 0
+    const source = relativePath(projectRoot, result.path)
+    const canonicalExists = fs.existsSync(canonical)
+    return {
+        name: 'accounts.json',
+        ok: count > 0,
+        value: canonicalExists ? `${count} 个账号` : `${count} 个账号（兼容读取 ${source}）`,
+        hint: count === 0
+            ? '文件为空，到「账号」Tab 添加账号。'
+            : canonicalExists
+                ? null
+                : '当前使用旧路径；在「账号」Tab 保存/新增后会写入 config/accounts.json。'
     }
 }
 
 function checkConfig(projectRoot) {
-    const p = path.join(projectRoot, 'src', 'config.json')
-    const exists = fs.existsSync(p)
+    const canonical = getCanonicalConfigPath(projectRoot)
+    const result = readFirstExistingJson(getConfigCandidatePaths(projectRoot))
+    if (!result) {
+        return { name: 'config.json', ok: false, value: '未创建', hint: '到「配置」Tab 保存一次即自动创建。' }
+    }
+    if (result.error) {
+        return { name: 'config.json', ok: false, value: '解析失败', hint: result.error.message }
+    }
+
+    const canonicalExists = fs.existsSync(canonical)
+    const source = relativePath(projectRoot, result.path)
     return {
         name: 'config.json',
-        ok: exists,
-        value: exists ? '存在' : '未创建',
-        hint: exists ? null : '到「配置」Tab 保存一次即自动创建。'
+        ok: true,
+        value: canonicalExists ? '存在' : `兼容读取 ${source}`,
+        hint: canonicalExists ? null : '当前使用旧路径；在「配置」Tab 保存后会写入 config/config.json。'
     }
 }
 
@@ -158,10 +198,15 @@ function checkSystemd() {
 }
 
 function checkSessionsDir(projectRoot) {
-    const candidates = [
-        path.join(projectRoot, 'src', 'browser', 'sessions'),
-        path.join(projectRoot, 'dist', 'browser', 'sessions')
-    ]
+    let sessionPath = 'sessions'
+    try {
+        const configResult = readFirstExistingJson(getConfigCandidatePaths(projectRoot))
+        if (configResult?.data && typeof configResult.data.sessionPath === 'string' && configResult.data.sessionPath) {
+            sessionPath = configResult.data.sessionPath
+        }
+    } catch {}
+
+    const candidates = getSessionRootCandidates(projectRoot, sessionPath)
     let totalBytes = 0
     let accountCount = 0
     for (const base of candidates) {

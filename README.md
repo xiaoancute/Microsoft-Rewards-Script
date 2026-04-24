@@ -133,8 +133,9 @@ sudo npx patchright install-deps chromium  # Debian/Ubuntu 专用
 # Fedora: sudo dnf install nss atk at-spi2-atk libdrm libxkbcommon mesa-libgbm libXcomposite libXdamage libXrandr libXScrnSaver alsa-lib gtk3
 
 # 4. 准备配置
-cp src/accounts.example.json src/accounts.json
-cp src/config.example.json   src/config.json
+mkdir -p config
+cp src/accounts.example.json config/accounts.json
+cp src/config.example.json   config/config.json
 # 然后编辑账号和偏好
 
 # 5. 构建并跑
@@ -142,7 +143,7 @@ npm run build
 npm start              # 或 npm run webui 启动管理页
 ```
 
-> ⚠️ **改了 `src/accounts.json` 或 `src/config.json` 必须重新 `npm run build`**（或 `npm run ts-start` 免编译跑源码）。用管理页修改的话自动改 `src/`，仍然需要重建才能影响 `npm start`。
+> 改了 `config/accounts.json` 或 `config/config.json` 后，下次运行立即生效。只有代码改动时，才需要重新 `npm run build`。
 
 ---
 
@@ -170,8 +171,8 @@ sudo loginctl enable-linger $USER
 
 1. 下载或克隆源代码
 2. 运行 `setup.bat` 一键部署（如果失败请参考上面「方式二」的手动步骤）
-3. 在 `dist/` 目录的 `accounts.json` 里填账号
-4. 按需修改 `dist/config.json`
+3. 在 `config/accounts.json` 里填账号
+4. 按需修改 `config/config.json`
 5. 运行 `run.bat` 或 `npm start` 启动
 
 ## 🍎 macOS 部署
@@ -217,9 +218,10 @@ xvfb-run npm start   # 或直接 ./scripts/nix/run.sh
 
 登录成功后，cookie 和指纹会保存到：
 
-- 源码运行：`src/browser/sessions/<邮箱>/`
-- 构建后运行：`dist/browser/sessions/<邮箱>/`
+- 本地 / 构建后运行：`sessions/<邮箱>/`
 - Docker：宿主机 `./sessions/<邮箱>/`（由 volume 挂载）
+
+`config.json` 里的 `sessionPath` 现在表示“项目根目录下的目录名”，默认就是 `sessions`。
 
 **多备份这个目录**，下次运行就不用重新登录了。
 
@@ -302,7 +304,7 @@ A：管理页被装成了 systemd user service，systemd user 默认不继承桌
 A：用 `npm run open-session -- -email 你的邮箱@outlook.com` 在桌面终端里跑一次，弹出窗口手动完成登录（验证码也能过），会话保存后再回到管理页就自动了。别在无头模式下调登录——看不到页面排查不了。
 
 **Q：改了 `config.json`/`accounts.json` 没生效**
-A：管理页里改的会直接写 `src/config.json` / `src/accounts.json`。但 `npm start` 跑的是 `dist/` 的编译产物，改完必须在管理页点「重新构建」或 `npm run build`。Docker 跑的话编辑 `./config/*.json` 后 `docker compose restart` 就生效。
+A：现在统一读项目根目录的 `config/config.json` 和 `config/accounts.json`。改完后，下次运行立即生效；只有改了 TypeScript 代码才需要重新 `npm run build`。Docker 跑的话编辑 `./config/*.json` 后 `docker compose restart` 就生效。
 
 **Q：多账户怎么跑得更快？**
 A：在管理页「配置」Tab 把 `clusters` 调大（比如账号数 / 2）。注意每个进程一份 Chromium 很吃内存，而且**多账号共享同一出口 IP 很容易被批量封号**——建议每账号配独立代理（没配的话启动时会有 WARN）。

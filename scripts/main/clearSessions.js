@@ -1,20 +1,14 @@
 import path from 'path'
 import fs from 'fs'
-import { getDirname, getProjectRoot, log, loadJsonFile, safeRemoveDirectory } from '../utils.js'
+import { getDirname, getProjectRoot, log, loadConfig, getSessionRootPaths, safeRemoveDirectory } from '../utils.js'
 
 const __dirname = getDirname(import.meta.url)
 const projectRoot = getProjectRoot(__dirname)
 
-const possibleConfigPaths = [
-    path.join(projectRoot, 'config.json'),
-    path.join(projectRoot, 'src', 'config.json'),
-    path.join(projectRoot, 'dist', 'config.json')
-]
-
 log('DEBUG', '项目根目录:', projectRoot)
 log('DEBUG', '正在搜索 config.json...')
 
-const configResult = loadJsonFile(possibleConfigPaths, true)
+const configResult = loadConfig(projectRoot)
 const config = configResult.data
 const configPath = configResult.path
 
@@ -29,30 +23,27 @@ if (!config.sessionPath) {
 log('INFO', '来自配置的会话路径:', config.sessionPath)
 
 const configDir = path.dirname(configPath)
-const possibleSessionDirs = [
-    path.resolve(configDir, config.sessionPath),
-    path.join(projectRoot, 'src/browser', config.sessionPath),
-    path.join(projectRoot, 'dist/browser', config.sessionPath)
-]
+const possibleSessionDirs = getSessionRootPaths(projectRoot, config.sessionPath)
 
 log('DEBUG', '正在搜索会话目录...')
 
-let sessionDir = null
+let foundAny = false
 for (const p of possibleSessionDirs) {
     log('DEBUG', '检查:', p)
     if (fs.existsSync(p)) {
-        sessionDir = p
+        foundAny = true
         log('DEBUG', '在以下位置找到会话目录:', p)
-        break
     }
 }
 
-if (!sessionDir) {
-    sessionDir = path.resolve(configDir, config.sessionPath)
-    log('DEBUG', '使用备用会话目录:', sessionDir)
+if (!foundAny) {
+    log('DEBUG', '未找到现有会话目录，仍将使用规范目录作为清理目标:', path.resolve(configDir, config.sessionPath))
 }
 
-const success = safeRemoveDirectory(sessionDir, projectRoot)
+let success = true
+for (const sessionDir of possibleSessionDirs) {
+    success = safeRemoveDirectory(sessionDir, projectRoot) && success
+}
 
 if (!success) {
     process.exit(1)

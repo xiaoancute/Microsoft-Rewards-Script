@@ -1,6 +1,12 @@
 import type { Page } from 'patchright'
 import type { MicrosoftRewardsBot } from '../../../index'
-import { getErrorMessage, getSubtitleMessage, promptInput } from './LoginUtils'
+import {
+    clearTextInputForRetry,
+    getSubtitleMessage,
+    promptInput,
+    waitForLoginAdvance,
+    waitForLoginPageSettled
+} from './LoginUtils'
 
 export class CodeLogin {
     private readonly textInputSelector = '[data-testid="codeInputWrapper"]'
@@ -41,6 +47,41 @@ export class CodeLogin {
         }
     }
 
+    private async requestManualCode(): Promise<string | null> {
+        return await promptInput({
+            question: `输入6位代码 (等待 ${this.maxManualSeconds}秒): `,
+            timeoutSeconds: this.maxManualSeconds,
+            validate: code => /^\d{6}$/.test(code)
+        })
+    }
+
+    private async submitAndConfirmAdvance(page: Page, attemptLabel: string): Promise<void> {
+        await this.bot.utils.wait(500)
+        await waitForLoginPageSettled(page, {
+            bot: this.bot,
+            context: `${attemptLabel} 提交后`,
+            tag: 'LOGIN-CODE',
+            timeoutMs: 1500,
+            pauseMs: 150
+        })
+
+        const result = await waitForLoginAdvance(page, {
+            bot: this.bot,
+            context: `${attemptLabel} 提交后确认`,
+            tag: 'LOGIN-CODE',
+            inputSelectors: [this.textInputSelector, this.secondairyInputSelector],
+            timeoutMs: 2500
+        })
+
+        if (result.status === 'error' && result.errorMessage) {
+            throw new Error(result.errorMessage)
+        }
+
+        if (result.status === 'stalled') {
+            throw new Error('代码提交后页面未推进')
+        }
+    }
+
     async handle(page: Page): Promise<void> {
         try {
             this.bot.logger.info(this.bot.isMobile, 'LOGIN-CODE', '请求代码登录身份验证')
@@ -53,11 +94,7 @@ export class CodeLogin {
             }
 
             for (let attempt = 1; attempt <= this.maxManualAttempts; attempt++) {
-                const code = await promptInput({
-                    question: `输入6位代码 (等待 ${this.maxManualSeconds}秒): `,
-                    timeoutSeconds: this.maxManualSeconds,
-                    validate: code => /^\d{6}$/.test(code)
-                })
+                const code = await this.requestManualCode()
 
                 if (!code || !/^\d{6}$/.test(code)) {
                     this.bot.logger.warn(
@@ -86,12 +123,10 @@ export class CodeLogin {
                     continue
                 }
 
-                await this.bot.utils.wait(500)
-                await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {})
-
-                // 检查是否输入了错误代码
-                const errorMessage = await getErrorMessage(page)
-                if (errorMessage) {
+                try {
+                    await this.submitAndConfirmAdvance(page, `验证码第 ${attempt} 次`)
+                } catch (error) {
+                    const errorMessage = error instanceof Error ? error.message : String(error)
                     this.bot.logger.warn(
                         this.bot.isMobile,
                         'LOGIN-CODE',
@@ -103,12 +138,7 @@ export class CodeLogin {
                     }
 
                     // 重试前清除输入字段
-                    const inputToClear = await page.$(this.textInputSelector).catch(() => null)
-                    if (inputToClear) {
-                        await inputToClear.click()
-                        await page.keyboard.press('Control+A')
-                        await page.keyboard.press('Backspace')
-                    }
+                    await clearTextInputForRetry(page, this.textInputSelector, this.bot.isMobile)
                     continue
                 }
 

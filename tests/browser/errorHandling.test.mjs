@@ -187,6 +187,7 @@ test('runTasks exits single-process mode with code 1 when any account fails', as
         }
     }
     bot.sendPushPlusSummary = async () => {}
+    bot.appendEarningsReport = async () => {}
     bot.Main = async () => {
         throw new Error('account flow failed')
     }

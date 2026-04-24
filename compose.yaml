@@ -4,8 +4,8 @@ services:
         container_name: microsoft-rewards-script
         restart: unless-stopped
         volumes:
-            - ./config:/usr/src/microsoft-rewards-script/dist/config
-            - ./sessions:/usr/src/microsoft-rewards-script/dist/browser/sessions
+            - ./config:/usr/src/microsoft-rewards-script/config
+            - ./sessions:/usr/src/microsoft-rewards-script/sessions
         environment:
             # ── Scheduling ───────────────────────────────────────────────────
             TZ: "Asia/Shanghai" # Set your timezone for proper scheduling

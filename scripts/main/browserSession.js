@@ -11,7 +11,6 @@ import {
     loadConfig,
     loadAccounts,
     findAccountByEmail,
-    getRuntimeBase,
     buildProxyConfig
 } from '../utils.js'
 import { getBrowserSessionState } from './browserSessionSupport.js'
@@ -38,7 +37,6 @@ if (!account) {
 }
 
 async function main() {
-    const runtimeBase = getRuntimeBase(projectRoot, args.dev)
     log('INFO', '验证会话数据...')
 
     if (!config.baseURL) {
@@ -47,7 +45,7 @@ async function main() {
     }
 
     const session = await getBrowserSessionState({
-        runtimeBase,
+        projectRoot,
         sessionPath: config.sessionPath,
         email: args.email,
         saveFingerprint: account.saveFingerprint
@@ -56,7 +54,7 @@ async function main() {
         process.exit(1)
     })
 
-    const { sessionBase, sessionType, isExistingSession, isMobile, fingerprintEnabled, cookies, fingerprint } = session
+    const { sessionBase, sourceSessionBase, sessionType, isExistingSession, isMobile, fingerprintEnabled, cookies, fingerprint } = session
 
     if (isExistingSession) {
         if (sessionType === 'mobile') {
@@ -68,6 +66,10 @@ async function main() {
             log('INFO', `已加载 ${sessionType} 指纹`)
         } else if (fingerprintEnabled) {
             log('WARN', `${sessionType} 已启用指纹保存，但当前未找到指纹文件，将以默认上下文继续`)
+        }
+        if (sourceSessionBase !== sessionBase) {
+            log('INFO', `检测到旧会话目录: ${sourceSessionBase}`)
+            log('INFO', `后续 cookies 将统一保存到: ${sessionBase}`)
         }
     } else {
         log('WARN', `未找到 ${args.email} 的现有 session，将启动全新浏览器用于首次登录`)

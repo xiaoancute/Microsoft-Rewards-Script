@@ -6,7 +6,13 @@ import {
     loadJsonFile,
     loadConfig as baseLoadConfig,
     loadAccounts as baseLoadAccounts,
+    getCanonicalAccountsFile,
+    getCanonicalConfigFile,
+    getAccountsExampleFile,
+    getConfigExampleFile,
     getSessionPath,
+    getSessionPathCandidates,
+    getSessionRootPaths,
     loadCookies,
     loadFingerprint,
     safeRemoveDirectory,
@@ -21,23 +27,20 @@ export function findProjectRoot(startDir) {
     return getProjectRoot(startDir)
 }
 
-// Accounts/config live under src/ in development, dist/ after a build. We
-// always prefer src/ for writes so edits survive `npm run build` (which wipes
-// dist/). Reads fall back to dist/ only if src/ is missing.
 function accountsPath(projectRoot) {
-    return path.join(projectRoot, 'src', 'accounts.json')
+    return getCanonicalAccountsFile(projectRoot)
 }
 
 function accountsExamplePath(projectRoot) {
-    return path.join(projectRoot, 'src', 'accounts.example.json')
+    return getAccountsExampleFile(projectRoot)
 }
 
 function configPath(projectRoot) {
-    return path.join(projectRoot, 'src', 'config.json')
+    return getCanonicalConfigFile(projectRoot)
 }
 
 function configExamplePath(projectRoot) {
-    return path.join(projectRoot, 'src', 'config.example.json')
+    return getConfigExampleFile(projectRoot)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -92,10 +95,9 @@ function assertValidEmail(email) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function readAccountsRaw(projectRoot) {
-    const target = accountsPath(projectRoot)
-    if (fs.existsSync(target)) {
-        const data = loadJsonFile([target], true)
-        return data.data
+    const target = baseLoadAccounts(projectRoot, false)
+    if (target.path !== accountsExamplePath(projectRoot)) {
+        return target.data
     }
 
     // First run: seed from example so the UI always has something editable.
@@ -202,10 +204,7 @@ export async function removeAccount(projectRoot, email) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function resolveSessionBaseCandidates(projectRoot, sessionPath, email) {
-    return [
-        getSessionPath(path.join(projectRoot, 'src'), sessionPath, email),
-        getSessionPath(path.join(projectRoot, 'dist'), sessionPath, email)
-    ]
+    return getSessionPathCandidates(projectRoot, sessionPath, email)
 }
 
 function pickExistingSessionBase(projectRoot, sessionPath, email) {
@@ -238,6 +237,7 @@ export async function listSessions(projectRoot) {
             const mobileCookies = await loadCookies(base, 'mobile')
             const desktopFp = await loadFingerprint(base, 'desktop')
             const mobileFp = await loadFingerprint(base, 'mobile')
+            const canonicalBase = getSessionPath(projectRoot, sessionPath, email)
 
             const cookieFile = (type) => path.join(base, `session_${type}.json`)
             const latestMtime = ['desktop', 'mobile']
@@ -246,7 +246,8 @@ export async function listSessions(projectRoot) {
 
             return {
                 email,
-                baseDir: base,
+                baseDir: canonicalBase,
+                sourceBaseDir: base,
                 exists: fs.existsSync(base),
                 desktop: {
                     cookies: desktopCookies.length,
@@ -286,10 +287,7 @@ export function removeOneSession(projectRoot, email) {
 export function removeAllSessions(projectRoot) {
     const config = readConfig(projectRoot)
     const sessionPath = config.sessionPath || 'sessions'
-    const roots = [
-        path.join(projectRoot, 'src', 'browser', sessionPath),
-        path.join(projectRoot, 'dist', 'browser', sessionPath)
-    ]
+    const roots = getSessionRootPaths(projectRoot, sessionPath)
     let removed = 0
     for (const root of roots) {
         if (!fs.existsSync(root)) continue
@@ -309,17 +307,9 @@ export function removeAllSessions(projectRoot) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function readConfig(projectRoot) {
-    const src = configPath(projectRoot)
-    if (fs.existsSync(src)) {
-        return loadJsonFile([src], true).data
-    }
-    const dist = path.join(projectRoot, 'dist', 'config.json')
-    if (fs.existsSync(dist)) {
-        return loadJsonFile([dist], true).data
-    }
-    const example = configExamplePath(projectRoot)
-    if (fs.existsSync(example)) {
-        return loadJsonFile([example], true).data
+    const result = baseLoadConfig(projectRoot, false)
+    if (result.path) {
+        return result.data
     }
     throw new Error('config.json 与 config.example.json 都不存在')
 }
@@ -356,14 +346,24 @@ export async function saveConfig(projectRoot, next) {
 
 export function getStatus(projectRoot, runner) {
     const distBuilt = fs.existsSync(path.join(projectRoot, 'dist', 'index.js'))
-    const accountsExists = fs.existsSync(accountsPath(projectRoot))
-    const configExists = fs.existsSync(configPath(projectRoot))
+    const accounts = baseLoadAccounts(projectRoot, false)
+    const config = baseLoadConfig(projectRoot, false)
+    const canonicalAccounts = accountsPath(projectRoot)
+    const canonicalConfig = configPath(projectRoot)
+    const accountsSource = accounts?.path && accounts.path !== accountsExamplePath(projectRoot) ? accounts.path : null
+    const configSource = config?.path && config.path !== configExamplePath(projectRoot) ? config.path : null
     return {
         nodeVersion: process.version,
         projectRoot,
         distBuilt,
-        accountsExists,
-        configExists,
+        accountsExists: Boolean(accountsSource),
+        configExists: Boolean(configSource),
+        accountsPath: accountsSource,
+        configPath: configSource,
+        canonicalAccountsExists: fs.existsSync(canonicalAccounts),
+        canonicalConfigExists: fs.existsSync(canonicalConfig),
+        canonicalAccountsPath: canonicalAccounts,
+        canonicalConfigPath: canonicalConfig,
         jobs: runner.snapshot()
     }
 }

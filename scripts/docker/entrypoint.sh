@@ -5,7 +5,6 @@ set -e
 export PLAYWRIGHT_BROWSERS_PATH=0
 
 SCRIPT_DIR="/usr/src/microsoft-rewards-script"
-DIST_DIR="$SCRIPT_DIR/dist"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. Timezone: default to UTC if not provided
@@ -32,7 +31,7 @@ fi
 #    All fields match accounts.example.json exactly.
 #    The loop stops at the first missing ACCOUNT_N_EMAIL.
 # ─────────────────────────────────────────────────────────────────────────────
-CONFIG_DIR="$DIST_DIR/config"
+CONFIG_DIR="$SCRIPT_DIR/config"
 mkdir -p "$CONFIG_DIR"
 
 ACCOUNTS_FILE="$CONFIG_DIR/accounts.json"
