@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Microsoft Rewards 管理页</title>
+    <link rel="icon" href='data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text x="50%" y="50%" dominant-baseline="central" text-anchor="middle" font-size="78">🎁</text></svg>' />
     <script>
         // FOUC 防闪烁：在样式加载前就把主题定下来
         (function () {
@@ -130,7 +131,7 @@
                     <button class="btn btn-danger" id="btn-clear-all-sessions">清除全部</button>
                 </div>
             </div>
-            <p class="hint">
+            <p class="hint" id="sessions-hint">
                 点「打开浏览器」会弹出 Chromium 窗口。若账号未登录，请在窗口里手动完成登录，关闭窗口后 session 会自动保存到本地。
             </p>
             <div class="tablewrap">
@@ -161,7 +162,7 @@
                     <button class="btn btn-primary" id="btn-save-config">保存</button>
                 </div>
             </div>
-            <p class="hint">改完保存后，下次运行立即生效。只有代码改动时，才需要 <button class="inline-link" id="btn-build-from-config">重新构建</button>。</p>
+            <p class="hint" id="config-hint">改完保存后，下次运行立即生效。只有代码改动时，才需要 <button class="inline-link" id="btn-build-from-config">重新构建</button>。</p>
             <form id="config-form"></form>
         </section>
 
@@ -192,10 +193,10 @@
         <!-- 定时任务 -->
         <section class="panel hidden" id="panel-schedule">
             <div class="panel-head">
-                <h2>定时任务 (systemd user timer)</h2>
+                <h2 id="schedule-title">定时任务 (systemd user timer)</h2>
                 <button class="btn btn-sm" id="btn-schedule-refresh">刷新</button>
             </div>
-            <p class="hint">
+            <p class="hint" id="schedule-hint">
                 让脚本每天自动跑。仅 Linux 可用。关机后还想触发需要 <code>sudo loginctl enable-linger $USER</code> 一次。
             </p>
             <div class="card">
@@ -215,7 +216,7 @@
                     <p class="field-hint">参考：<code>*-*-* 07:00:00</code>（每天 7:00）<code>*-*-* 07,19:00:00</code>（每天 7 和 19 点）</p>
                 </div>
             </div>
-            <div class="card">
+            <div class="card" id="schedule-webui-card">
                 <h3>管理页自启 (microsoft-rewards-webui.service)</h3>
                 <p class="field-hint">装上后这个管理页本身会开机自启、异常自动重启。之后连 <code>./manage.sh</code> 都不用敲。</p>
                 <dl id="schedule-webui-dl"></dl>
@@ -224,7 +225,7 @@
                     <button class="btn btn-danger btn-sm" id="schedule-webui-uninstall">卸载</button>
                 </div>
             </div>
-            <div class="card">
+            <div class="card" id="schedule-journal-card">
                 <h3>journalctl 日志</h3>
                 <div class="row-actions">
                     <button class="btn btn-sm" id="schedule-journal-load">加载最近 200 行</button>
@@ -271,16 +272,19 @@
             <div class="panel-head">
                 <h2>收益报表</h2>
                 <div class="row-actions">
-                    <select id="reports-days" aria-label="报表范围">
-                        <option value="7">近 7 天</option>
-                        <option value="14">近 14 天</option>
-                        <option value="30">近 30 天</option>
-                        <option value="90">近 90 天</option>
+                    <select id="reports-range" aria-label="报表范围">
+                        <option value="today">今天</option>
+                        <option value="7d" selected>近 7 天</option>
+                        <option value="30d">近 30 天</option>
                     </select>
+                    <select id="reports-account" aria-label="账号筛选">
+                        <option value="all">全部账号</option>
+                    </select>
+                    <button class="btn btn-sm" id="btn-reports-export">导出当前筛选</button>
                     <button class="btn btn-sm" id="btn-reports-refresh">刷新</button>
                 </div>
             </div>
-            <p class="hint">每次脚本运行结束后会追加记录到 <code>reports/earnings.jsonl</code>，这里按天和账号做汇总。</p>
+            <p class="hint">每次脚本运行结束后会追加记录到 <code>reports/earnings.jsonl</code>，这里按本地自然日聚合，支持按账号筛选和历史排障跳转。</p>
             <div class="grid dash-grid">
                 <div class="card dash-card">
                     <h3>总收益</h3>
@@ -298,9 +302,30 @@
                     <div class="dash-sub">命中后自动停止的运行次数</div>
                 </div>
                 <div class="card dash-card">
-                    <h3>总耗时</h3>
-                    <div class="dash-big" id="reports-duration">0秒</div>
-                    <div class="dash-sub" id="reports-duration-sub">累计账号执行耗时</div>
+                    <h3>需关注账号</h3>
+                    <div class="dash-big" id="reports-attention-count">0</div>
+                    <div class="dash-sub" id="reports-attention-sub">当前范围内暂无异常账号</div>
+                </div>
+            </div>
+            <div class="grid report-insight-grid">
+                <div class="card">
+                    <div class="report-card-head">
+                        <h3>问题账号</h3>
+                    </div>
+                    <div class="tablewrap">
+                        <table>
+                            <thead><tr><th>账号</th><th>状态</th><th>连续失败</th><th>最近失败</th><th>原因</th><th>操作</th></tr></thead>
+                            <tbody id="reports-issues-tbody"><tr><td colspan="6" class="empty">暂无数据</td></tr></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="report-card-head">
+                        <h3>失败原因</h3>
+                        <button class="btn btn-sm" id="btn-reports-failures-loghistory">去历史日志</button>
+                    </div>
+                    <div class="empty-block hidden" id="reports-failures-empty">当前范围内没有失败记录</div>
+                    <div class="bar-list" id="reports-failure-list"></div>
                 </div>
             </div>
             <div class="card">
@@ -316,13 +341,16 @@
                 <h3>账号汇总</h3>
                 <div class="tablewrap">
                     <table>
-                        <thead><tr><th>账号</th><th>运行</th><th>收益</th><th>成功 / 失败</th><th>风控停止</th><th>最近运行</th><th>最近错误</th></tr></thead>
-                        <tbody id="reports-account-tbody"><tr><td colspan="7" class="empty">暂无数据</td></tr></tbody>
+                        <thead><tr><th>账号</th><th>运行</th><th>收益</th><th>成功 / 失败</th><th>风控停止</th><th>当前状态</th><th>最近运行</th><th>最近错误</th><th>操作</th></tr></thead>
+                        <tbody id="reports-account-tbody"><tr><td colspan="9" class="empty">暂无数据</td></tr></tbody>
                     </table>
                 </div>
             </div>
             <div class="card">
-                <h3>最近运行</h3>
+                <div class="report-card-head">
+                    <h3>最近运行</h3>
+                    <button class="btn btn-sm" id="btn-reports-runs-loghistory">去历史日志</button>
+                </div>
                 <div class="tablewrap">
                     <table>
                         <thead><tr><th>开始时间</th><th>账号</th><th>收益</th><th>成功 / 失败</th><th>状态</th></tr></thead>

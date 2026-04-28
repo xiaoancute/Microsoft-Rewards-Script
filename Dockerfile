@@ -37,7 +37,11 @@ WORKDIR /usr/src/microsoft-rewards-script
 ENV NODE_ENV=production \
     TZ=UTC \
     PLAYWRIGHT_BROWSERS_PATH=0 \
-    FORCE_HEADLESS=1
+    FORCE_HEADLESS=1 \
+    MRS_RUNTIME_MODE=docker \
+    WEBUI_ENABLED=false \
+    WEBUI_HOST=0.0.0.0 \
+    WEBUI_PORT=3000
 
 # Install minimal system libraries required for Chromium headless to run,
 # plus jq (for config generation/patching) and gettext-base (for envsubst)
@@ -80,22 +84,34 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /usr/src/microsoft-rewards-script/dist ./dist
 COPY --from=builder /usr/src/microsoft-rewards-script/package*.json ./
 COPY --from=builder /usr/src/microsoft-rewards-script/node_modules ./node_modules
+COPY --from=builder /usr/src/microsoft-rewards-script/scripts/webui ./scripts/webui
+COPY --from=builder /usr/src/microsoft-rewards-script/scripts/utils.js ./scripts/utils.js
+COPY --from=builder /usr/src/microsoft-rewards-script/runtime-paths.cjs ./runtime-paths.cjs
+COPY --from=builder /usr/src/microsoft-rewards-script/earnings-report.cjs ./earnings-report.cjs
 
 # Copy config example into the image so entrypoint can use it as a fallback
 # when the user hasn't mounted their own config.json
-COPY src/config.example.json ./src/config.example.json
+COPY --from=builder /usr/src/microsoft-rewards-script/src/config.example.json ./src/config.example.json
+COPY --from=builder /usr/src/microsoft-rewards-script/src/accounts.example.json ./src/accounts.example.json
 
 # Create stable user-facing directories for config and session data
-RUN mkdir -p ./config ./sessions
+RUN mkdir -p ./config ./sessions ./logs ./reports
 
-# Copy runtime scripts with proper permissions from the start
-COPY --chmod=755 scripts/docker/run_daily.sh ./scripts/docker/run_daily.sh
-COPY --chmod=755 scripts/docker/run_daily_cron.sh ./scripts/docker/run_daily_cron.sh
-COPY --chmod=755 scripts/docker/log-forwarder.sh ./scripts/docker/log-forwarder.sh
-COPY --chmod=644 src/crontab.template /etc/cron.d/microsoft-rewards-cron.template
-COPY --chmod=755 scripts/docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+# Copy runtime scripts and normalize permissions without requiring BuildKit
+COPY scripts/docker/run_daily.sh ./scripts/docker/run_daily.sh
+COPY scripts/docker/log-forwarder.sh ./scripts/docker/log-forwarder.sh
+COPY scripts/docker/supervise.sh /usr/local/bin/docker-supervise.sh
+COPY src/crontab.template /etc/cron.d/microsoft-rewards-cron.template
+COPY scripts/docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod 755 ./scripts/docker/run_daily.sh \
+    ./scripts/docker/log-forwarder.sh \
+    /usr/local/bin/docker-supervise.sh \
+    /usr/local/bin/entrypoint.sh \
+    && chmod 644 /etc/cron.d/microsoft-rewards-cron.template
+
+EXPOSE 3000
 
 # Entrypoint handles TZ, accounts/config generation, initial run toggle,
 # cron templating & launch
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-CMD ["cron", "-f", "-l", "2"]
+CMD ["/usr/local/bin/docker-supervise.sh"]

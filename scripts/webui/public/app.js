@@ -28,7 +28,35 @@ let state = {
     jobs: [],
     reports: null,
     activeJobId: null,
-    sse: null
+    sse: null,
+    reportFilters: {
+        range: '7d',
+        account: 'all'
+    },
+    pendingAccountFocus: null
+}
+
+function currentRuntime() {
+    return state.status?.runtime || {
+        mode: 'local',
+        isDocker: false,
+        webuiEnabled: true
+    }
+}
+
+function currentCapabilities() {
+    return state.status?.capabilities || {
+        canOpenBrowserSession: true,
+        canManageSystemd: true,
+        canBuildProject: true,
+        canRunNow: true,
+        canViewReports: true,
+        canViewLogHistory: true
+    }
+}
+
+function isDockerRuntime() {
+    return Boolean(currentRuntime().isDocker)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -39,13 +67,18 @@ function getToken() {
     return sessionStorage.getItem(TOKEN_KEY) || ''
 }
 
+function authHeaders(extra = {}) {
+    const headers = { ...extra }
+    const token = getToken()
+    if (token) headers['Authorization'] = `Bearer ${token}`
+    return headers
+}
+
 async function api(path, opts = {}) {
-    const headers = { ...(opts.headers || {}) }
+    const headers = authHeaders(opts.headers || {})
     if (opts.body && !headers['Content-Type']) {
         headers['Content-Type'] = 'application/json'
     }
-    const token = getToken()
-    if (token) headers['Authorization'] = `Bearer ${token}`
     const res = await fetch(path, {
         ...opts,
         headers,
@@ -80,6 +113,13 @@ function toast(msg, kind = '') {
     el.textContent = msg
     document.getElementById('toast-wrap').appendChild(el)
     setTimeout(() => el.remove(), 4500)
+}
+
+function setDisabled(button, disabled, title = '') {
+    if (!button) return
+    button.disabled = disabled
+    if (disabled && title) button.title = title
+    else button.removeAttribute('title')
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -142,6 +182,8 @@ async function loadDashboard() {
 }
 
 function renderDashboard(status, env, sched, accounts) {
+    const capabilities = status.capabilities || currentCapabilities()
+    const externalRunning = Boolean(status.externalRun?.active)
     // Run card
     const running = (status.jobs || []).find(j => j.running && j.kind === 'start')
     const runBig = document.getElementById('dash-run-state')
@@ -155,6 +197,13 @@ function renderDashboard(status, env, sched, accounts) {
         btnRunNow.classList.add('hidden')
         btnRunStop.classList.remove('hidden')
         btnRunStop.dataset.jobId = String(running.id)
+        setDisabled(btnRunNow, false)
+    } else if (externalRunning) {
+        runBig.textContent = '运行中'
+        runBig.className = 'dash-big run'
+        runSub.textContent = '容器任务运行中 · 来自 cron / run_daily.sh'
+        btnRunNow.classList.add('hidden')
+        btnRunStop.classList.add('hidden')
     } else {
         runBig.textContent = '空闲'
         runBig.className = 'dash-big'
@@ -164,12 +213,29 @@ function renderDashboard(status, env, sched, accounts) {
             : '还没运行过'
         btnRunNow.classList.remove('hidden')
         btnRunStop.classList.add('hidden')
+        setDisabled(
+            btnRunNow,
+            !capabilities.canRunNow,
+            capabilities.canRunNow ? '' : '当前环境不支持立即运行'
+        )
     }
 
     // Timer card
     const timerBig = document.getElementById('dash-timer-state')
     const timerSub = document.getElementById('dash-timer-sub')
-    if (sched && sched.reward) {
+    if (sched?.mode === 'docker') {
+        if (sched.reward?.active) {
+            timerBig.textContent = 'Docker 运行中'
+            timerBig.className = 'dash-big ok'
+        } else if (sched.reward?.enabled) {
+            timerBig.textContent = 'Docker 已配置'
+            timerBig.className = 'dash-big ok'
+        } else {
+            timerBig.textContent = 'Docker 未配置'
+            timerBig.className = 'dash-big warn'
+        }
+        timerSub.textContent = `Cron: ${sched.reward?.onCalendar || '未设置'} · 启动即跑: ${sched.reward?.runOnStart ? '开' : '关'}`
+    } else if (sched && sched.reward) {
         if (sched.reward.active) {
             timerBig.textContent = '已启用'
             timerBig.className = 'dash-big ok'
@@ -218,9 +284,17 @@ function renderDashboard(status, env, sched, accounts) {
     const builtOk = env.checks.find(c => c.name === '项目已构建 (dist/)')?.ok
     const hasAccount = accounts.length > 0
     const anyLogin = hasAccount && hasSessions
-    const hasTimer = sched?.reward?.active
-    const steps = [
-        { done: nodeOk && chromiumOk && builtOk, text: '环境就绪（Node、Chromium、构建）— 到「环境」Tab' },
+    const hasTimer = Boolean(sched?.reward?.active || sched?.reward?.enabled)
+    const steps = isDockerRuntime()
+        ? [
+            { done: nodeOk && builtOk, text: '容器环境就绪 — 到「环境」Tab 看挂载与浏览器状态' },
+            { done: hasAccount, text: '添加账号 — 到「账号」Tab' },
+            { done: anyLogin, text: '首次登录：先在本地生成 session，再挂载到容器的 sessions/' },
+            { done: false, text: '立即跑一轮 — 首页「▶ 立即运行」或到「运行日志」Tab' },
+            { done: hasTimer, text: '检查 Docker 定时 — 到「定时」Tab 看 CRON_SCHEDULE / RUN_ON_START' }
+        ]
+        : [
+            { done: nodeOk && chromiumOk && builtOk, text: '环境就绪（Node、Chromium、构建）— 到「环境」Tab' },
         { done: hasAccount, text: '添加账号 — 到「账号」Tab' },
         { done: anyLogin, text: '首次登录（弹浏览器）— 到「Session」Tab 点「打开浏览器」' },
         { done: false, text: '立即跑一轮 — 首页「▶ 立即运行」或到「运行日志」Tab' },
@@ -273,11 +347,16 @@ function renderAccounts() {
     const tbody = document.getElementById('accounts-tbody')
     if (state.accounts.length === 0) {
         tbody.innerHTML = '<tr><td colspan="7" class="empty">还没有账号，点右上角「+ 添加账号」</td></tr>'
+        if (state.pendingAccountFocus) {
+            toast(`账号页里找不到 ${state.pendingAccountFocus}，它可能只存在于历史报表中`, 'err')
+            state.pendingAccountFocus = null
+        }
         return
     }
     tbody.innerHTML = ''
     state.accounts.forEach(acc => {
         const tr = document.createElement('tr')
+        tr.dataset.email = acc.email
         const fingerprint = []
         if (acc.saveFingerprint?.mobile) fingerprint.push('移动')
         if (acc.saveFingerprint?.desktop) fingerprint.push('桌面')
@@ -295,9 +374,28 @@ function renderAccounts() {
         `
         tbody.appendChild(tr)
     })
+    focusPendingAccountRow()
     tbody.querySelectorAll('button[data-act]').forEach(btn => {
         btn.addEventListener('click', () => onAccountAction(btn.dataset.act, btn.dataset.email))
     })
+}
+
+function focusPendingAccountRow() {
+    const email = state.pendingAccountFocus
+    if (!email) return
+
+    const rows = Array.from(document.querySelectorAll('#accounts-tbody tr[data-email]'))
+    const target = rows.find(row => row.dataset.email === email)
+    state.pendingAccountFocus = null
+
+    if (!target) {
+        toast(`账号页里找不到 ${email}，它可能只存在于历史报表中`, 'err')
+        return
+    }
+
+    target.classList.add('row-focus')
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    setTimeout(() => target.classList.remove('row-focus'), 2200)
 }
 
 function onAccountAction(act, email) {
@@ -422,6 +520,11 @@ async function loadSessions() {
 
 function renderSessions() {
     const tbody = document.getElementById('sessions-tbody')
+    const capabilities = currentCapabilities()
+    const openHint = isDockerRuntime()
+        ? 'Docker 里不能直接弹浏览器。请先在本地完成登录，再把 sessions/ 挂载进容器。'
+        : '点「打开浏览器」会弹出 Chromium 窗口。若账号未登录，请在窗口里手动完成登录，关闭窗口后 session 会自动保存到本地。'
+    document.getElementById('sessions-hint').textContent = openHint
     if (state.sessions.length === 0) {
         tbody.innerHTML = '<tr><td colspan="6" class="empty">先到「账号」Tab 添加账号</td></tr>'
         return
@@ -432,6 +535,9 @@ function renderSessions() {
         const fmtDate = s.lastLoginAt
             ? new Date(s.lastLoginAt).toLocaleString('zh-CN', { hour12: false })
             : '—'
+        const openDisabled = !capabilities.canOpenBrowserSession
+            ? ' disabled title="Docker 里不能直接弹浏览器，请先在本地生成 session 后挂载进来"'
+            : ''
         tr.innerHTML = `
             <td>${escapeHtml(s.email)} ${s.isLoggedIn ? '<span class="badge ok">已登录</span>' : '<span class="badge warn">未登录</span>'}</td>
             <td>${s.desktop.cookies ? `<span class="badge ok">${s.desktop.cookies}</span>` : '<span class="badge">无</span>'} ${s.desktop.fingerprint ? '<span class="badge ok">指纹</span>' : ''}</td>
@@ -439,7 +545,7 @@ function renderSessions() {
             <td>${s.desktop.fingerprint || s.mobile.fingerprint ? '已保存' : '—'}</td>
             <td>${escapeHtml(fmtDate)}</td>
             <td class="row-actions">
-                <button class="btn btn-sm btn-primary" data-act="open" data-email="${escapeAttr(s.email)}">打开浏览器</button>
+                <button class="btn btn-sm btn-primary" data-act="open" data-email="${escapeAttr(s.email)}"${openDisabled}>打开浏览器</button>
                 <button class="btn btn-sm btn-danger" data-act="clear" data-email="${escapeAttr(s.email)}">清除</button>
             </td>
         `
@@ -456,6 +562,10 @@ async function onSessionAction(act, email) {
 }
 
 async function openBrowser(email) {
+    if (!currentCapabilities().canOpenBrowserSession) {
+        toast('Docker 里不能直接弹浏览器。请先在本地生成 session，再把 sessions/ 挂载进容器。', 'err')
+        return
+    }
     try {
         const { jobId } = await api(`/api/sessions/${encodeURIComponent(email)}/open`, {
             method: 'POST',
@@ -525,6 +635,10 @@ function renderConfig() {
     const form = document.getElementById('config-form')
     form.innerHTML = ''
     const cfg = state.config
+    const canBuildProject = currentCapabilities().canBuildProject
+    document.getElementById('config-hint').innerHTML = canBuildProject
+        ? '改完保存后，下次运行立即生效。只有代码改动时，才需要 <button class="inline-link" id="btn-build-from-config">重新构建</button>。'
+        : '改完保存后，下次运行立即生效。Docker 运行时镜像不承担重新构建；如果改了 TypeScript 代码，请在宿主机重新构建镜像后再启动容器。'
 
     form.appendChild(section('核心', [
         textField('baseURL', cfg.baseURL, '基础 URL'),
@@ -594,6 +708,19 @@ function renderConfig() {
         checkboxField('webhook.pushplus.enabled', cfg.webhook?.pushplus?.enabled ?? false, '启用'),
         textField('webhook.pushplus.token', cfg.webhook?.pushplus?.token ?? '', 'token（从 pushplus.plus 获取）')
     ]))
+
+    const inlineBuild = document.getElementById('btn-build-from-config')
+    if (inlineBuild) {
+        inlineBuild.addEventListener('click', () => {
+            switchTab('logs')
+            startBuild()
+        })
+        setDisabled(
+            inlineBuild,
+            !canBuildProject,
+            canBuildProject ? '' : 'Docker 运行时镜像不支持在容器内重新构建'
+        )
+    }
 }
 
 function section(title, fields) {
@@ -691,10 +818,6 @@ document.getElementById('btn-save-config').addEventListener('click', async () =>
 })
 
 document.getElementById('btn-reload-config').addEventListener('click', loadConfig)
-document.getElementById('btn-build-from-config').addEventListener('click', () => {
-    switchTab('logs')
-    startBuild()
-})
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Jobs & logs
@@ -702,8 +825,12 @@ document.getElementById('btn-build-from-config').addEventListener('click', () =>
 
 async function loadJobs() {
     try {
-        const { jobs } = await api('/api/jobs')
+        const [{ jobs }, status] = await Promise.all([
+            api('/api/jobs'),
+            api('/api/status').catch(() => state.status)
+        ])
         state.jobs = jobs
+        if (status) state.status = status
         renderJobFilter()
         updateRunButtons()
     } catch (err) {
@@ -727,20 +854,33 @@ function renderJobFilter() {
 
 function updateRunButtons() {
     const running = state.jobs.find(j => j.running && j.kind === 'start')
+    const externalRunning = Boolean(state.status?.externalRun?.active) && !running
+    const capabilities = currentCapabilities()
     const btnStart = document.getElementById('btn-run-start')
     const btnStop = document.getElementById('btn-run-stop')
+    const btnBuild = document.getElementById('btn-run-build')
     const pill = document.getElementById('job-status-pill')
+    setDisabled(
+        btnBuild,
+        !capabilities.canBuildProject,
+        capabilities.canBuildProject ? '' : 'Docker 运行时镜像不支持在容器内重新构建'
+    )
     if (running) {
         btnStart.disabled = true
         btnStop.classList.remove('hidden')
         btnStop.dataset.jobId = String(running.id)
         pill.className = 'pill run'
         pill.textContent = `运行中 · 任务 #${running.id}`
+    } else if (externalRunning) {
+        btnStart.disabled = true
+        btnStop.classList.add('hidden')
+        pill.className = 'pill run'
+        pill.textContent = '运行中 · 容器任务'
     } else {
-        btnStart.disabled = false
+        btnStart.disabled = !capabilities.canRunNow
         btnStop.classList.add('hidden')
         pill.className = 'pill'
-        pill.textContent = '空闲'
+        pill.textContent = capabilities.canRunNow ? '空闲' : '当前环境不支持立即运行'
     }
 }
 
@@ -760,6 +900,10 @@ document.getElementById('btn-run-start').addEventListener('click', async () => {
 document.getElementById('btn-run-build').addEventListener('click', () => startBuild())
 
 async function startBuild() {
+    if (!currentCapabilities().canBuildProject) {
+        toast('Docker 运行时镜像不支持在容器内重新构建。修改 TypeScript 代码后请重建镜像。', 'err')
+        return
+    }
     try {
         const { jobId } = await api('/api/build', { method: 'POST', body: {} })
         toast(`已启动构建 #${jobId}`, 'ok')
@@ -874,37 +1018,185 @@ function appendLog(entry) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function loadReports() {
-    const days = Number(document.getElementById('reports-days')?.value) || 7
+    const filters = getReportFilters()
+    state.reportFilters = filters
+    const params = buildReportQueryParams(filters)
     try {
-        const report = await api('/api/reports/earnings?days=' + encodeURIComponent(days))
+        const report = await api('/api/reports/earnings?' + params.toString())
         state.reports = report
-        renderReports(report)
+        syncReportAccountOptions(report.filters?.accounts || [], filters.account)
+        renderReports(report, filters)
     } catch (err) {
         toast('加载收益报表失败: ' + err.message, 'err')
     }
 }
 
-function renderReports(report) {
+function getReportFilters() {
+    return {
+        range: document.getElementById('reports-range')?.value || state.reportFilters.range || '7d',
+        account: document.getElementById('reports-account')?.value || state.reportFilters.account || 'all'
+    }
+}
+
+function buildReportQueryParams(filters) {
+    const params = new URLSearchParams({
+        range: filters.range,
+        timezoneOffsetMinutes: String(new Date().getTimezoneOffset())
+    })
+    if (filters.account && filters.account !== 'all') {
+        params.set('account', filters.account)
+    }
+    return params
+}
+
+function syncReportAccountOptions(accounts, selectedAccount = 'all') {
+    const select = document.getElementById('reports-account')
+    const nextOptions = ['all', ...accounts.filter(Boolean)]
+    const current = nextOptions.includes(selectedAccount) ? selectedAccount : 'all'
+
+    select.innerHTML = nextOptions.map(email =>
+        email === 'all'
+            ? '<option value="all">全部账号</option>'
+            : `<option value="${escapeAttr(email)}">${escapeHtml(email)}</option>`
+    ).join('')
+    select.value = current
+    state.reportFilters.account = current
+}
+
+function renderReports(report, filters = state.reportFilters) {
     const totals = report.totals || {}
+    const selectedAccount = filters.account || 'all'
+    const isFiltered = selectedAccount !== 'all'
+    const isEmpty = (totals.runs || 0) === 0
+    const attentionAccounts = (report.accounts || []).filter(item => item.consecutiveFailures > 0 || item.lastStatus === 'risk_control')
+    const rangeLabel = formatReportRangeLabel(report.window?.range || filters.range)
+
     document.getElementById('reports-total-points').textContent = formatPoints(totals.collectedPoints || 0)
     document.getElementById('reports-total-sub').textContent = totals.runs
-        ? '近 ' + report.days + ' 天 · ' + totals.runs + ' 次运行 · ' + totals.accounts + ' 个账号结果'
-        : '暂无运行记录'
+        ? `${rangeLabel} · ${isFiltered ? selectedAccount : '全部账号'} · ${totals.runs} 次运行 · ${totals.accounts} 个账号结果`
+        : isFiltered
+            ? `当前范围内 ${selectedAccount} 暂无记录`
+            : '暂无运行记录'
     document.getElementById('reports-success-rate').textContent = Number(totals.successRate || 0).toFixed(1) + '%'
     document.getElementById('reports-success-sub').textContent = totals.accounts
         ? '失败账号结果: ' + (totals.failedAccounts || 0)
         : '—'
     document.getElementById('reports-risk-count').textContent = String(totals.riskControlStops || 0)
-    document.getElementById('reports-duration').textContent = formatDuration(totals.totalDuration || 0)
+    document.getElementById('reports-attention-count').textContent = String(attentionAccounts.length)
+    document.getElementById('reports-attention-sub').textContent = attentionAccounts.length
+        ? `当前范围内需关注的账号: ${attentionAccounts.length}`
+        : '当前范围内暂无异常账号'
 
-    renderReportDaily(report.daily || [])
-    renderReportAccounts(report.accounts || [])
-    renderReportRuns(report.recentRuns || [])
+    renderProblemAccounts(report.accounts || [], { isEmpty, selectedAccount })
+    renderFailureBuckets(report.failureBuckets || [], { isEmpty })
+    renderReportDaily(report.daily || [], { isEmpty })
+    renderReportAccounts(report.accounts || [], { isEmpty, selectedAccount })
+    renderReportRuns(report.recentRuns || [], { isEmpty })
 }
 
-function renderReportDaily(items) {
+function renderProblemAccounts(items, { isEmpty, selectedAccount }) {
+    const tbody = document.getElementById('reports-issues-tbody')
+    const problems = items
+        .filter(item => item.consecutiveFailures > 0 || item.lastStatus === 'risk_control')
+        .sort((a, b) =>
+            Number(b.lastStatus === 'risk_control') - Number(a.lastStatus === 'risk_control') ||
+            (b.consecutiveFailures || 0) - (a.consecutiveFailures || 0) ||
+            (new Date(b.lastFailureAt || 0).getTime() || 0) - (new Date(a.lastFailureAt || 0).getTime() || 0)
+        )
+
+    if (isEmpty) {
+        tbody.innerHTML = `<tr><td colspan="6" class="empty">${selectedAccount !== 'all' ? '当前范围内该账号暂无记录' : '暂无收益记录，脚本完整运行一次后会出现数据'}</td></tr>`
+        return
+    }
+    if (!problems.length) {
+        tbody.innerHTML = '<tr><td colspan="6" class="empty">当前范围内暂无需要关注的账号</td></tr>'
+        return
+    }
+
+    tbody.innerHTML = problems.map(item => {
+        const reason = item.lastError
+            ? `<span class="badge warn" title="${escapeAttr(item.lastError)}">${escapeHtml(truncateText(item.lastError, 20))}</span>`
+            : `<span class="badge">${escapeHtml(formatFailureBucketLabel(item.primaryFailureBucket))}</span>`
+        return '<tr>' +
+            `<td>${escapeHtml(item.email)}</td>` +
+            `<td>${formatStatusBadge(item.lastStatus)}</td>` +
+            `<td>${item.consecutiveFailures || 0}</td>` +
+            `<td>${formatDateTime(item.lastFailureAt)}</td>` +
+            `<td>${reason}</td>` +
+            `<td><button class="btn btn-sm" data-report-act="view-account" data-email="${escapeAttr(item.email)}">查看账号</button></td>` +
+            '</tr>'
+    }).join('')
+
+    bindReportAccountButtons()
+}
+
+function renderFailureBuckets(items, { isEmpty }) {
+    const list = document.getElementById('reports-failure-list')
+    const empty = document.getElementById('reports-failures-empty')
+    const maxCount = Math.max(...items.map(item => Number(item.count) || 0), 0)
+
+    if (isEmpty || maxCount === 0) {
+        list.innerHTML = ''
+        empty.classList.remove('hidden')
+        empty.textContent = isEmpty ? '当前范围内还没有运行失败记录' : '当前范围内没有失败记录'
+        return
+    }
+
+    empty.classList.add('hidden')
+    list.innerHTML = items.map(item => {
+        const width = maxCount > 0 ? (Number(item.count || 0) / maxCount) * 100 : 0
+        return '<div class="bar-row">' +
+            `<div class="bar-label">${escapeHtml(item.label)}</div>` +
+            `<div class="bar-track"><div class="bar-fill" style="width:${width.toFixed(1)}%"></div></div>` +
+            `<div class="bar-value">${item.count} 次 / ${item.accountCount} 号</div>` +
+            '</div>'
+    }).join('')
+}
+
+function openReportedAccount(email) {
+    if (!email) return
+    state.pendingAccountFocus = email
+    switchTab('accounts')
+}
+
+function bindReportAccountButtons() {
+    document.querySelectorAll('button[data-report-act="view-account"]').forEach(btn => {
+        btn.addEventListener('click', () => openReportedAccount(btn.dataset.email))
+    })
+}
+
+function formatReportRangeLabel(range) {
+    if (range === 'today') return '今天'
+    if (range === '7d') return '近 7 天'
+    if (range === '30d') return '近 30 天'
+    return range || '当前范围'
+}
+
+function formatFailureBucketLabel(key) {
+    return {
+        risk_control: '风控拦截',
+        login: '登录失败',
+        session: '会话失效',
+        network: '网络异常',
+        flow: '流程异常',
+        unknown: '未归类'
+    }[key] || '未归类'
+}
+
+function formatStatusBadge(status) {
+    if (status === 'risk_control') return '<span class="badge warn">风控停止</span>'
+    if (status === 'failed') return '<span class="badge warn">异常</span>'
+    return '<span class="badge ok">正常</span>'
+}
+
+function truncateText(value, maxLength = 24) {
+    const text = String(value || '')
+    return text.length > maxLength ? text.slice(0, Math.max(0, maxLength - 3)) + '...' : text
+}
+
+function renderReportDaily(items, { isEmpty }) {
     const tbody = document.getElementById('reports-daily-tbody')
-    if (!items.length) {
+    if (isEmpty) {
         tbody.innerHTML = '<tr><td colspan="7" class="empty">暂无收益记录，脚本完整运行一次后会出现数据</td></tr>'
         return
     }
@@ -922,10 +1214,10 @@ function renderReportDaily(items) {
     }).join('')
 }
 
-function renderReportAccounts(items) {
+function renderReportAccounts(items, { isEmpty, selectedAccount }) {
     const tbody = document.getElementById('reports-account-tbody')
-    if (!items.length) {
-        tbody.innerHTML = '<tr><td colspan="7" class="empty">暂无账号汇总</td></tr>'
+    if (isEmpty) {
+        tbody.innerHTML = `<tr><td colspan="9" class="empty">${selectedAccount !== 'all' ? '当前范围内该账号暂无记录' : '暂无账号汇总'}</td></tr>`
         return
     }
     tbody.innerHTML = items.map(item => {
@@ -937,31 +1229,29 @@ function renderReportAccounts(items) {
             '<td><span class="badge ok">' + formatPoints(item.collectedPoints || 0) + '</span></td>' +
             '<td>' + (item.successCount || 0) + ' / ' + (item.failedCount || 0) + '</td>' +
             '<td>' + risk + '</td>' +
+            '<td>' + formatStatusBadge(item.lastStatus) + '</td>' +
             '<td>' + formatDateTime(item.lastRunAt) + '</td>' +
             '<td>' + error + '</td>' +
+            `<td><button class="btn btn-sm" data-report-act="view-account" data-email="${escapeAttr(item.email)}">查看账号</button></td>` +
             '</tr>'
     }).join('')
+
+    bindReportAccountButtons()
 }
 
-function renderReportRuns(items) {
+function renderReportRuns(items, { isEmpty }) {
     const tbody = document.getElementById('reports-runs-tbody')
-    if (!items.length) {
+    if (isEmpty) {
         tbody.innerHTML = '<tr><td colspan="5" class="empty">暂无运行记录</td></tr>'
         return
     }
     tbody.innerHTML = items.map(item => {
-        const failed = item.hadWorkerFailure || item.failedCount > 0 || item.riskControlStopped
-        const status = item.riskControlStopped
-            ? '<span class="badge warn">风控停止</span>'
-            : failed
-                ? '<span class="badge warn">异常</span>'
-                : '<span class="badge ok">完成</span>'
         return '<tr>' +
             '<td>' + formatDateTime(item.startedAt) + '</td>' +
             '<td>' + (item.accountCount || 0) + '</td>' +
             '<td><span class="badge ok">' + formatPoints(item.totalCollectedPoints || 0) + '</span></td>' +
             '<td>' + (item.successCount || 0) + ' / ' + (item.failedCount || 0) + '</td>' +
-            '<td>' + status + '</td>' +
+            '<td>' + formatStatusBadge(item.status) + '</td>' +
             '</tr>'
     }).join('')
 }
@@ -985,8 +1275,60 @@ function formatDateTime(value) {
     return d.toLocaleString('zh-CN', { hour12: false })
 }
 
+function parseDownloadFilename(header) {
+    if (!header) return 'earnings-report.zip'
+    const match = header.match(/filename="([^"]+)"/i) || header.match(/filename=([^;]+)/i)
+    return match?.[1] ? decodeURIComponent(match[1]) : 'earnings-report.zip'
+}
+
+async function downloadBlobWithAuth(url, fallbackName) {
+    const res = await fetch(url, {
+        headers: authHeaders()
+    })
+    if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || `HTTP ${res.status}`)
+    }
+
+    const blob = await res.blob()
+    const filename = parseDownloadFilename(res.headers.get('content-disposition')) || fallbackName
+    const objectUrl = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = objectUrl
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(objectUrl)
+    return filename
+}
+
+async function exportCurrentReport() {
+    const btn = document.getElementById('btn-reports-export')
+    const originalText = btn.textContent
+    const filters = getReportFilters()
+    const params = buildReportQueryParams(filters)
+
+    btn.disabled = true
+    btn.textContent = '导出中...'
+
+    try {
+        const filename = await downloadBlobWithAuth('/api/reports/earnings/export?' + params.toString(), 'earnings-report.zip')
+        toast(`已导出 ${filename}`, 'ok')
+    } catch (err) {
+        toast(`导出失败: ${err.message}`, 'err')
+    } finally {
+        btn.disabled = false
+        btn.textContent = originalText
+    }
+}
+
 document.getElementById('btn-reports-refresh')?.addEventListener('click', loadReports)
-document.getElementById('reports-days')?.addEventListener('change', loadReports)
+document.getElementById('btn-reports-export')?.addEventListener('click', exportCurrentReport)
+document.getElementById('reports-range')?.addEventListener('change', loadReports)
+document.getElementById('reports-account')?.addEventListener('change', loadReports)
+document.getElementById('btn-reports-failures-loghistory')?.addEventListener('click', () => switchTab('loghistory'))
+document.getElementById('btn-reports-runs-loghistory')?.addEventListener('click', () => switchTab('loghistory'))
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Utils
@@ -1089,6 +1431,58 @@ async function loadSchedule() {
 }
 
 function renderSchedule(sched) {
+    const title = document.getElementById('schedule-title')
+    const hint = document.getElementById('schedule-hint')
+    const webuiCard = document.getElementById('schedule-webui-card')
+    const journalCard = document.getElementById('schedule-journal-card')
+    const btnInstall = document.getElementById('schedule-install')
+    const btnUninstall = document.getElementById('schedule-uninstall')
+    const btnSave = document.getElementById('schedule-save')
+    const inputOnCalendar = document.getElementById('schedule-oncalendar')
+    const btnWebuiInstall = document.getElementById('schedule-webui-install')
+    const btnWebuiUninstall = document.getElementById('schedule-webui-uninstall')
+
+    if (sched.mode === 'docker') {
+        title.textContent = '定时任务 (Docker cron)'
+        hint.innerHTML = 'Docker 模式下这里展示的是容器里的 cron 配置。要改时间请编辑 <code>compose.yaml</code> 或 <code>.env</code> 里的 <code>CRON_SCHEDULE</code> / <code>RUN_ON_START</code>，这里保留“立即触发一次”。'
+        const r = sched.reward
+        document.getElementById('schedule-reward-dl').innerHTML = `
+            <dt>模式</dt><dd>Docker cron</dd>
+            <dt>当前运行</dt><dd>${r.active ? '✅' : '❌'}</dd>
+            <dt>Cron 表达式</dt><dd>${escapeHtml(r.onCalendar || '未设置')}</dd>
+            <dt>启动即跑</dt><dd>${r.runOnStart ? '✅' : '❌'}</dd>
+        `
+        inputOnCalendar.value = r.onCalendar || ''
+        inputOnCalendar.disabled = true
+        btnInstall.classList.add('hidden')
+        btnUninstall.classList.add('hidden')
+        btnSave.classList.add('hidden')
+
+        const w = sched.webui
+        document.getElementById('schedule-webui-dl').innerHTML = `
+            <dt>已启用</dt><dd>${w.enabled ? '✅' : '❌'}</dd>
+            <dt>当前运行</dt><dd>${w.active ? '✅' : '❌'}</dd>
+            <dt>监听地址</dt><dd>${escapeHtml(`${w.host}:${w.port}`)}</dd>
+            <dt>Bearer 鉴权</dt><dd>${w.tokenProtected ? '✅ 已开启' : '⚠️ 未开启'}</dd>
+        `
+        btnWebuiInstall.classList.add('hidden')
+        btnWebuiUninstall.classList.add('hidden')
+        journalCard.classList.add('hidden')
+        webuiCard.classList.remove('hidden')
+        return
+    }
+
+    title.textContent = '定时任务 (systemd user timer)'
+    hint.innerHTML = '让脚本每天自动跑。仅 Linux 可用。关机后还想触发需要 <code>sudo loginctl enable-linger $USER</code> 一次。'
+    inputOnCalendar.disabled = false
+    btnInstall.classList.remove('hidden')
+    btnUninstall.classList.remove('hidden')
+    btnSave.classList.remove('hidden')
+    btnWebuiInstall.classList.remove('hidden')
+    btnWebuiUninstall.classList.remove('hidden')
+    webuiCard.classList.remove('hidden')
+    journalCard.classList.remove('hidden')
+
     const r = sched.reward
     document.getElementById('schedule-reward-dl').innerHTML = `
         <dt>已安装</dt><dd>${r.timerInstalled ? '✅' : '❌'}</dd>
@@ -1218,7 +1612,8 @@ async function viewLogFile(name) {
     const dl = document.getElementById('loghist-download')
     const del = document.getElementById('loghist-delete')
     const token = getToken()
-    dl.href = `/api/log-files/${encodeURIComponent(name)}?download=1${token ? `&_t=${Date.now()}` : ''}`
+    dl.dataset.name = name
+    dl.href = token ? '#' : `/api/log-files/${encodeURIComponent(name)}?download=1`
     dl.classList.remove('hidden')
     del.classList.remove('hidden')
     try {
@@ -1231,6 +1626,17 @@ async function viewLogFile(name) {
 }
 
 document.getElementById('btn-loghist-refresh').addEventListener('click', loadLogHistory)
+document.getElementById('loghist-download').addEventListener('click', async event => {
+    const name = event.currentTarget.dataset.name
+    if (!name || !getToken()) return
+    event.preventDefault()
+    try {
+        const filename = await downloadBlobWithAuth(`/api/log-files/${encodeURIComponent(name)}?download=1`, name)
+        toast(`已下载 ${filename}`, 'ok')
+    } catch (err) {
+        toast(`下载失败: ${err.message}`, 'err')
+    }
+})
 document.getElementById('btn-loghist-clear').addEventListener('click', async () => {
     if (!confirm('确认清空所有历史日志？此操作不可撤销。')) return
     try {

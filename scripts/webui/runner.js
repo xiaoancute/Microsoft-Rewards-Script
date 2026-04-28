@@ -187,6 +187,25 @@ export class Runner extends EventEmitter {
         return this.startNpm('build', { label: 'npm run build' })
     }
 
+    startDockerDailyRun({ skipRandomSleep = true } = {}) {
+        const existing = this.hasRunning('start')
+        if (existing) {
+            const err = new Error(`已有任务运行中 (id=${existing.id})`)
+            err.code = 'ALREADY_RUNNING'
+            err.status = 409
+            throw err
+        }
+
+        const script = path.join(this.projectRoot, 'scripts', 'docker', 'run_daily.sh')
+        return this.spawnJob({
+            kind: 'start',
+            label: 'Docker 立即运行',
+            command: process.platform === 'win32' ? 'bash.exe' : 'bash',
+            args: [script],
+            env: skipRandomSleep ? { SKIP_RANDOM_SLEEP: 'true' } : {}
+        })
+    }
+
     openBrowserSession(email, { dev = false } = {}) {
         if (!email || typeof email !== 'string' || !email.includes('@')) {
             const err = new Error('无效邮箱')

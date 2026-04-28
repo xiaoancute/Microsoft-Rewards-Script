@@ -64,10 +64,10 @@ cd Microsoft-Rewards-Script
 
 **3. 准备配置目录**
 
-Docker 会把宿主机的 `./config` 目录挂载到容器里。先把示例文件放进去：
+Docker 会把宿主机的 `./config`、`./sessions`、`./logs`、`./reports` 都挂载进容器。先把目录和示例文件准备好：
 
 ```bash
-mkdir -p config sessions
+mkdir -p config sessions logs reports
 cp src/accounts.example.json config/accounts.json
 cp src/config.example.json   config/config.json
 ```
@@ -98,9 +98,13 @@ sed -i 's/"headless": false/"headless": true/' config/config.json
 TZ: "Asia/Shanghai"          # 时区，保持不变
 CRON_SCHEDULE: '0 7 * * *'   # 每天几点跑，默认早上 7 点
 RUN_ON_START: 'true'         # 容器启动时立即跑一次
+WEBUI_ENABLED: 'true'        # 启用容器内管理页
+WEBUI_TOKEN: '改成你自己的长随机串'
 ```
 
 > 不懂 cron 语法？到 [crontab.guru](https://crontab.guru) 生成即可。
+>
+> `WEBUI_TOKEN` 一定要改，管理页 API 会要求 Bearer token。浏览器第一次打开管理页时会弹框让你输入它。
 
 **7. 启动**
 
@@ -110,7 +114,9 @@ docker compose logs -f     # 查看实时日志，Ctrl+C 退出日志（容器�
 docker compose down        # 停止容器
 ```
 
-**首次登录提示**：如果账号登不进去，脚本会留一个窗口让你手动完成登录。无头模式下看不到窗口，建议第一次在本地先用「方式二」跑一次把 `sessions/` 目录生成好，再丢进 Docker。
+管理页默认在 <http://127.0.0.1:3000>。打开后先输入 `compose.yaml` 里的 `WEBUI_TOKEN`。
+
+**首次登录提示**：Docker 里的管理页可以看 session、删 session，但**不能直接弹浏览器登录**。建议第一次在本地先用「方式二」或 `npm run open-session -- -email 你的邮箱@outlook.com` 完成登录，把生成好的 `sessions/` 目录带进 Docker。
 
 ---
 
@@ -316,7 +322,7 @@ A：你在远程机子（VPS）上起了 `./manage.sh`。要么 SSH 端口转发
 A：跑 `./diagnose-cron.sh <容器名>` 诊断 cron 状态，或者 `docker compose logs -f`。
 
 **Q：管理页能在 Docker 里用吗？**
-A：**暂不行**。当前 Dockerfile 没把 `scripts/webui/` 复制进镜像，容器里只有 cron。在 Docker 里管理账号仍然是改挂载的 `./config/*.json` 然后重启容器。Web UI 的 Docker 整合列入后续计划但未完成。
+A：**现在可以**。`docker compose up -d` 会同时起 cron 和 WebUI，默认地址是 <http://127.0.0.1:3000>。注意容器里不支持「打开浏览器登录」、systemd 定时管理、在镜像内重新构建 TypeScript 代码；这些按钮会在页面里禁用或切成只读说明。
 
 **Q：我被封号了怎么办？**
 A：①停掉该账号（管理页「账号」Tab 删掉，或临时 `accounts.json` 里注释掉）。②看是不是 IP 被标——多账号共享 IP / VPS IP 段被批量封是常见原因。③封号告警会通过 Discord/ntfy/PushPlus 强制推送（即便你设了 `webhookLogFilter`），可以据此定位什么时候被封的。

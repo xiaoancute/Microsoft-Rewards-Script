@@ -91,12 +91,147 @@ test('readEarningsReport aggregates days, accounts, failures, and risk stops', a
     assert.equal(report.accounts.find(item => item.email === 'b@example.com').lastError, '登录失败')
 })
 
+test('readEarningsReport supports local-day windows and timezone-aware today range', async () => {
+    const projectRoot = await makeProjectRoot()
+
+    await appendEarningsRun(projectRoot, {
+        runStartedAt: '2026-04-23T15:30:00.000Z',
+        runFinishedAt: '2026-04-23T15:33:00.000Z',
+        accountStats: [{ email: 'before@example.com', collectedPoints: 3, duration: 5, success: true }]
+    })
+    await appendEarningsRun(projectRoot, {
+        runStartedAt: '2026-04-23T16:30:00.000Z',
+        runFinishedAt: '2026-04-23T16:35:00.000Z',
+        accountStats: [{ email: 'edge@example.com', collectedPoints: 7, duration: 6, success: true }]
+    })
+    await appendEarningsRun(projectRoot, {
+        runStartedAt: '2026-04-24T01:10:00.000Z',
+        runFinishedAt: '2026-04-24T01:14:00.000Z',
+        accountStats: [{ email: 'edge@example.com', collectedPoints: 10, duration: 8, success: true }]
+    })
+
+    const localToday = readEarningsReport(projectRoot, {
+        range: 'today',
+        timezoneOffsetMinutes: -480,
+        now: '2026-04-24T12:00:00.000Z'
+    })
+    const utcToday = readEarningsReport(projectRoot, {
+        range: 'today',
+        timezoneOffsetMinutes: 0,
+        now: '2026-04-24T12:00:00.000Z'
+    })
+
+    assert.equal(localToday.window.range, 'today')
+    assert.equal(localToday.window.startDate, '2026-04-24')
+    assert.equal(localToday.window.endDate, '2026-04-24')
+    assert.equal(localToday.totals.runs, 2)
+    assert.equal(localToday.totals.accounts, 2)
+    assert.equal(localToday.totals.collectedPoints, 17)
+    assert.equal(localToday.daily.length, 1)
+    assert.equal(localToday.daily[0].date, '2026-04-24')
+    assert.equal(localToday.daily[0].runs, 2)
+
+    assert.equal(utcToday.totals.runs, 1)
+    assert.equal(utcToday.totals.accounts, 1)
+    assert.equal(utcToday.totals.collectedPoints, 10)
+})
+
+test('readEarningsReport supports account-scoped summaries, filled daily rows, and failure buckets', async () => {
+    const projectRoot = await makeProjectRoot()
+
+    await appendEarningsRun(projectRoot, {
+        runStartedAt: '2026-04-22T00:20:00.000Z',
+        runFinishedAt: '2026-04-22T00:25:00.000Z',
+        accountStats: [
+            { email: 'a@example.com', collectedPoints: 12, duration: 11, success: true },
+            { email: 'b@example.com', collectedPoints: 5, duration: 8, success: true }
+        ]
+    })
+    await appendEarningsRun(projectRoot, {
+        runStartedAt: '2026-04-23T00:20:00.000Z',
+        runFinishedAt: '2026-04-23T00:25:00.000Z',
+        accountStats: [
+            { email: 'a@example.com', collectedPoints: 0, duration: 9, success: false, error: '登录失败' },
+            { email: 'b@example.com', collectedPoints: 0, duration: 7, success: false, error: 'connect ETIMEDOUT proxy' }
+        ]
+    })
+    await appendEarningsRun(projectRoot, {
+        runStartedAt: '2026-04-24T00:20:00.000Z',
+        runFinishedAt: '2026-04-24T00:23:00.000Z',
+        riskControlStopped: true,
+        accountStats: [
+            {
+                email: 'a@example.com',
+                collectedPoints: 0,
+                duration: 6,
+                success: false,
+                error: '命中风控暂停',
+                riskControlStopped: true
+            },
+            { email: 'c@example.com', collectedPoints: 4, duration: 5, success: true }
+        ]
+    })
+
+    const report = readEarningsReport(projectRoot, {
+        range: '7d',
+        account: 'a@example.com',
+        timezoneOffsetMinutes: 0,
+        now: '2026-04-24T12:00:00.000Z'
+    })
+
+    assert.equal(report.days, 7)
+    assert.equal(report.window.range, '7d')
+    assert.equal(report.window.startDate, '2026-04-18')
+    assert.equal(report.window.endDate, '2026-04-24')
+    assert.equal(report.daily.length, 7)
+    assert.deepEqual(report.daily.map(item => item.date), [
+        '2026-04-18',
+        '2026-04-19',
+        '2026-04-20',
+        '2026-04-21',
+        '2026-04-22',
+        '2026-04-23',
+        '2026-04-24'
+    ])
+    assert.equal(report.totals.runs, 3)
+    assert.equal(report.totals.accounts, 3)
+    assert.equal(report.totals.collectedPoints, 12)
+    assert.equal(report.totals.failedAccounts, 2)
+    assert.equal(report.totals.riskControlStops, 1)
+    assert.equal(report.totals.successRate, 33.3)
+    assert.equal(report.totals.totalDuration, 26)
+
+    assert.equal(report.accounts.length, 1)
+    assert.equal(report.accounts[0].email, 'a@example.com')
+    assert.equal(report.accounts[0].lastStatus, 'risk_control')
+    assert.equal(report.accounts[0].consecutiveFailures, 2)
+    assert.equal(report.accounts[0].lastSuccessAt, '2026-04-22T00:25:00.000Z')
+    assert.equal(report.accounts[0].lastFailureAt, '2026-04-24T00:23:00.000Z')
+    assert.equal(report.accounts[0].primaryFailureBucket, 'risk_control')
+    assert.equal(report.accounts[0].lastError, '命中风控暂停')
+
+    assert.deepEqual(report.recentRuns.map(item => item.status), ['risk_control', 'failed', 'success'])
+    assert.deepEqual(report.recentRuns.map(item => item.accountCount), [1, 1, 1])
+
+    const bucketMap = Object.fromEntries(report.failureBuckets.map(item => [item.key, item]))
+    assert.equal(bucketMap.risk_control.count, 1)
+    assert.equal(bucketMap.risk_control.accountCount, 1)
+    assert.equal(bucketMap.login.count, 1)
+    assert.equal(bucketMap.login.accountCount, 1)
+    assert.equal(bucketMap.network.count, 0)
+})
+
 test('readEarningsReport returns empty summary when no report exists', async () => {
     const projectRoot = await makeProjectRoot()
-    const report = readEarningsReport(projectRoot, { days: 14 })
+    const report = readEarningsReport(projectRoot, { days: 14, now: '2026-04-24T12:00:00.000Z' })
 
     assert.equal(report.days, 14)
     assert.equal(report.totals.runs, 0)
-    assert.deepEqual(report.daily, [])
+    assert.equal(report.daily.length, 14)
+    assert.equal(report.daily[0].date, '2026-04-11')
+    assert.equal(report.daily[13].date, '2026-04-24')
     assert.deepEqual(report.accounts, [])
+    assert.equal(report.window.startDate, '2026-04-11')
+    assert.equal(report.window.endDate, '2026-04-24')
+    assert.equal(report.failureBuckets.length, 6)
 })

@@ -1,8 +1,7 @@
 import http from 'http'
 import fs from 'fs'
 import path from 'path'
-import { fileURLToPath } from 'url'
-import { createRequire } from 'module'
+import { fileURLToPath, pathToFileURL } from 'url'
 
 import { createRunner } from './runner.js'
 import {
@@ -37,12 +36,18 @@ import {
     deleteLogFile,
     deleteAllLogFiles
 } from './logstore.js'
+import { buildEarningsReport, buildEarningsExportZip } from './reports.js'
+import {
+    detectRuntime,
+    buildDockerScheduleStatus,
+    buildCapabilities,
+    readExternalRunStatus,
+    dockerUnsupported
+} from './runtime.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
-const require = createRequire(import.meta.url)
-const { readEarningsReport } = require('../../earnings-report.cjs')
-const projectRoot = findProjectRoot(__dirname)
+const defaultProjectRoot = findProjectRoot(__dirname)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CLI
@@ -71,11 +76,9 @@ if (cli.help) {
     process.exit(0)
 }
 
-const HOST = cli.host || process.env.WEBUI_HOST || '127.0.0.1'
-const PORT = cli.port || Number(process.env.WEBUI_PORT) || 3000
-const TOKEN = process.env.WEBUI_TOKEN || ''
-
-const runner = createRunner(projectRoot)
+const DEFAULT_HOST = cli.host || process.env.WEBUI_HOST || '127.0.0.1'
+const DEFAULT_PORT = cli.port || Number(process.env.WEBUI_PORT) || 3000
+const DEFAULT_TOKEN = process.env.WEBUI_TOKEN || ''
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HTTP helpers
@@ -132,11 +135,11 @@ function isLocalRequest(req) {
     )
 }
 
-function authorize(req, res) {
-    if (TOKEN) {
+function authorize(req, res, token) {
+    if (token) {
         const header = req.headers['authorization'] || ''
         const m = header.match(/^Bearer\s+(.+)$/)
-        if (!m || m[1] !== TOKEN) {
+        if (!m || m[1] !== token) {
             sendJson(res, 401, { error: '未授权，需要正确的 Bearer token' })
             return false
         }
@@ -193,19 +196,76 @@ function serveStatic(req, res, urlPath) {
 // Router
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function handleApi(req, res, url) {
+function buildRuntimeContext(env) {
+    const runtime = detectRuntime(env)
+    const capabilities = buildCapabilities(runtime)
+    const externalRun = readExternalRunStatus(runtime)
+    return { runtime, capabilities, externalRun }
+}
+
+function assertDockerCapability(capabilities, capabilityKey, message) {
+    if (!capabilities[capabilityKey]) {
+        throw dockerUnsupported(message)
+    }
+}
+
+function startDockerRun(runner, runtimeContext) {
+    if (runtimeContext.externalRun.active) {
+        throw Object.assign(new Error('Docker 容器里已有任务运行中，请等当前运行结束后再试。'), {
+            status: 409,
+            code: 'ALREADY_RUNNING'
+        })
+    }
+    return runner.startDockerDailyRun({ skipRandomSleep: true })
+}
+
+async function handleApi(req, res, url, context) {
     const { pathname, searchParams } = url
     const method = req.method || 'GET'
+    const { projectRoot, runner, env, host, port, token } = context
+    const runtimeContext = buildRuntimeContext(env)
 
     // GET /api/status
     if (method === 'GET' && pathname === '/api/status') {
-        return sendJson(res, 200, getStatus(projectRoot, runner))
+        return sendJson(res, 200, getStatus(projectRoot, runner, { env }))
     }
 
     // Reports
     if (method === 'GET' && pathname === '/api/reports/earnings') {
-        const days = Number(searchParams.get('days')) || 7
-        return sendJson(res, 200, readEarningsReport(projectRoot, { days }))
+        const days = Number(searchParams.get('days')) || undefined
+        const range = searchParams.get('range') || undefined
+        const account = searchParams.get('account') || undefined
+        const timezoneOffsetMinutes = searchParams.get('timezoneOffsetMinutes')
+        return sendJson(
+            res,
+            200,
+            buildEarningsReport(projectRoot, {
+                days,
+                range,
+                account,
+                timezoneOffsetMinutes: timezoneOffsetMinutes === null ? undefined : Number(timezoneOffsetMinutes)
+            })
+        )
+    }
+    if (method === 'GET' && pathname === '/api/reports/earnings/export') {
+        const days = Number(searchParams.get('days')) || undefined
+        const range = searchParams.get('range') || undefined
+        const account = searchParams.get('account') || undefined
+        const timezoneOffsetMinutes = searchParams.get('timezoneOffsetMinutes')
+        const exportPayload = await buildEarningsExportZip(projectRoot, {
+            days,
+            range,
+            account,
+            timezoneOffsetMinutes: timezoneOffsetMinutes === null ? undefined : Number(timezoneOffsetMinutes)
+        })
+        res.writeHead(200, {
+            'Content-Type': exportPayload.contentType,
+            'Content-Length': exportPayload.body.length,
+            'Content-Disposition': `attachment; filename="${path.basename(exportPayload.filename)}"`,
+            'Cache-Control': 'no-store'
+        })
+        res.end(exportPayload.body)
+        return
     }
 
     // Accounts
@@ -241,6 +301,11 @@ async function handleApi(req, res, url) {
     }
     const mSessOpen = pathname.match(/^\/api\/sessions\/([^/]+)\/open$/)
     if (method === 'POST' && mSessOpen) {
+        assertDockerCapability(
+            runtimeContext.capabilities,
+            'canOpenBrowserSession',
+            'Docker 模式不支持打开浏览器。请先在本地生成 session，再把 sessions/ 挂载进容器。'
+        )
         const email = decodeURIComponent(mSessOpen[1])
         const body = await readJsonBody(req).catch(() => ({}))
         const job = runner.openBrowserSession(email, { dev: Boolean(body?.dev) })
@@ -266,10 +331,17 @@ async function handleApi(req, res, url) {
 
     // Run control
     if (method === 'POST' && pathname === '/api/run/start') {
-        const job = runner.startStart()
+        const job = runtimeContext.runtime.isDocker
+            ? startDockerRun(runner, runtimeContext)
+            : runner.startStart()
         return sendJson(res, 201, { jobId: job.id })
     }
     if (method === 'POST' && pathname === '/api/build') {
+        assertDockerCapability(
+            runtimeContext.capabilities,
+            'canBuildProject',
+            'Docker 运行时镜像不支持在容器内重新构建。修改 TypeScript 代码后请重建镜像。'
+        )
         const job = runner.startBuild()
         return sendJson(res, 201, { jobId: job.id })
     }
@@ -343,47 +415,82 @@ async function handleApi(req, res, url) {
 
     // systemd (Linux user units)
     if (method === 'GET' && pathname === '/api/systemd') {
+        if (runtimeContext.runtime.isDocker) {
+            return sendJson(
+                res,
+                200,
+                buildDockerScheduleStatus({
+                    env,
+                    runtime: runtimeContext.runtime,
+                    externalRun: runtimeContext.externalRun,
+                    host,
+                    port
+                })
+            )
+        }
         const [status, linger] = await Promise.all([getSystemdStatus(), lingerStatus()])
         return sendJson(res, 200, { ...status, linger: linger.linger })
     }
     if (method === 'POST' && pathname === '/api/systemd/install') {
+        if (runtimeContext.runtime.isDocker) {
+            throw dockerUnsupported('Docker 模式下不支持在管理页里安装/卸载 systemd 定时，请直接修改 compose 里的 CRON_SCHEDULE。')
+        }
         const body = await readJsonBody(req).catch(() => ({}))
         return sendJson(res, 200, await installRewardTimer(projectRoot, { onCalendar: body?.onCalendar }))
     }
     if (method === 'POST' && pathname === '/api/systemd/uninstall') {
+        if (runtimeContext.runtime.isDocker) {
+            throw dockerUnsupported('Docker 模式下不支持在管理页里安装/卸载 systemd 定时，请直接修改 compose 里的 CRON_SCHEDULE。')
+        }
         return sendJson(res, 200, await uninstallRewardTimer())
     }
     if (method === 'PUT' && pathname === '/api/systemd/schedule') {
+        if (runtimeContext.runtime.isDocker) {
+            throw dockerUnsupported('Docker 模式下不支持在管理页里修改 CRON_SCHEDULE，请直接编辑 compose.yaml 或 .env。')
+        }
         const body = await readJsonBody(req)
         return sendJson(res, 200, await updateRewardSchedule(body?.onCalendar))
     }
     if (method === 'POST' && pathname === '/api/systemd/trigger') {
+        if (runtimeContext.runtime.isDocker) {
+            const job = startDockerRun(runner, runtimeContext)
+            return sendJson(res, 201, { triggered: true, jobId: job.id })
+        }
         return sendJson(res, 200, await triggerRewardNow())
     }
     if (method === 'GET' && pathname === '/api/systemd/journal') {
+        if (runtimeContext.runtime.isDocker) {
+            throw dockerUnsupported('Docker 模式下不支持 journalctl 视图，请到「运行日志」或「历史日志」查看。')
+        }
         const n = Number(searchParams.get('lines')) || 200
         return sendJson(res, 200, await rewardServiceLogs(n))
     }
     if (method === 'POST' && pathname === '/api/systemd/webui/install') {
+        if (runtimeContext.runtime.isDocker) {
+            throw dockerUnsupported('Docker 模式下管理页是否自启由 compose 控制，不能在这里安装 systemd WebUI 服务。')
+        }
         const body = await readJsonBody(req).catch(() => ({}))
         return sendJson(
             res,
             200,
             await installWebuiAutostart(projectRoot, {
-                host: body?.host || HOST,
-                port: body?.port || PORT,
-                token: body?.token ?? TOKEN
+                host: body?.host || host,
+                port: body?.port || port,
+                token: body?.token ?? token
             })
         )
     }
     if (method === 'POST' && pathname === '/api/systemd/webui/uninstall') {
+        if (runtimeContext.runtime.isDocker) {
+            throw dockerUnsupported('Docker 模式下管理页是否自启由 compose 控制，不能在这里卸载 systemd WebUI 服务。')
+        }
         return sendJson(res, 200, await uninstallWebuiAutostart())
     }
 
     sendJson(res, 404, { error: `未定义路由 ${method} ${pathname}` })
 }
 
-function streamLogs(req, res, searchParams) {
+function streamLogs(req, res, searchParams, runner) {
     const filterJobId = searchParams.get('jobId') ? Number(searchParams.get('jobId')) : null
 
     res.writeHead(200, {
@@ -429,43 +536,98 @@ function streamLogs(req, res, searchParams) {
 // Server
 // ─────────────────────────────────────────────────────────────────────────────
 
-const server = http.createServer(async (req, res) => {
-    try {
-        const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`)
+export function createWebUiServer({
+    projectRoot = defaultProjectRoot,
+    host = DEFAULT_HOST,
+    port = DEFAULT_PORT,
+    token = DEFAULT_TOKEN,
+    env = process.env,
+    runner = createRunner(projectRoot)
+} = {}) {
+    const context = {
+        projectRoot,
+        host,
+        port,
+        token,
+        env,
+        runner
+    }
 
-        if (url.pathname.startsWith('/api/')) {
-            if (!authorize(req, res)) return
-            await handleApi(req, res, url)
+    const server = http.createServer(async (req, res) => {
+        try {
+            const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`)
+
+            if (url.pathname.startsWith('/api/')) {
+                if (!authorize(req, res, token)) return
+                if (url.pathname === '/api/logs/stream') {
+                    return streamLogs(req, res, url.searchParams, runner)
+                }
+                await handleApi(req, res, url, context)
+                return
+            }
+
+            serveStatic(req, res, url.pathname)
+        } catch (err) {
+            sendError(res, err)
+        }
+    })
+
+    return { server, runner, context }
+}
+
+export function startWebUiServer(options = {}) {
+    const webui = createWebUiServer(options)
+    const { server } = webui
+    const { host, token } = webui.context
+
+    return new Promise((resolve, reject) => {
+        server.on('error', err => {
+            console.error(`[webui] 服务器错误: ${err.message}`)
+            reject(err)
+        })
+
+        server.listen(webui.context.port, host, () => {
+            const address = server.address()
+            const actualPort = typeof address === 'object' && address ? address.port : webui.context.port
+            webui.context.port = actualPort
+            const displayHost = host === '0.0.0.0' ? '127.0.0.1 (或局域网 IP)' : host
+            console.log(`[webui] 管理页已启动: http://${displayHost}:${actualPort}`)
+            if (!token && host !== '127.0.0.1' && host !== '::1') {
+                console.warn(
+                    '[webui] ⚠️  监听非本机地址但未设置 WEBUI_TOKEN，API 请求会被拒绝 (403)。设 WEBUI_TOKEN=xxx 开启鉴权。'
+                )
+            }
+            resolve(webui)
+        })
+    })
+}
+
+function isMainModule(importMetaUrl) {
+    const entry = process.argv[1]
+    return Boolean(entry) && pathToFileURL(path.resolve(entry)).href === importMetaUrl
+}
+
+if (isMainModule(import.meta.url)) {
+    let liveServer = null
+
+    startWebUiServer()
+        .then(({ server }) => {
+            liveServer = server
+        })
+        .catch(err => {
+            console.error(`[webui] 启动失败: ${err.message}`)
+            process.exit(1)
+        })
+
+    const gracefulShutdown = signal => () => {
+        console.log(`[webui] 收到 ${signal}，关闭中...`)
+        if (!liveServer) {
+            process.exit(0)
             return
         }
-
-        // Non-API: also protect so token-only deploy can't leak static pages
-        if (!authorize(req, res)) return
-        serveStatic(req, res, url.pathname)
-    } catch (err) {
-        sendError(res, err)
+        liveServer.close(() => process.exit(0))
+        setTimeout(() => process.exit(1), 3000).unref()
     }
-})
-
-server.on('error', err => {
-    console.error(`[webui] 服务器错误: ${err.message}`)
-    process.exit(1)
-})
-
-server.listen(PORT, HOST, () => {
-    const displayHost = HOST === '0.0.0.0' ? '127.0.0.1 (或局域网 IP)' : HOST
-    console.log(`[webui] 管理页已启动: http://${displayHost}:${PORT}`)
-    if (!TOKEN && HOST !== '127.0.0.1' && HOST !== '::1') {
-        console.warn(
-            '[webui] ⚠️  监听非本机地址但未设置 WEBUI_TOKEN，远程请求会被拒绝 (403)。设 WEBUI_TOKEN=xxx 开启鉴权。'
-        )
-    }
-})
-
-const gracefulShutdown = signal => () => {
-    console.log(`[webui] 收到 ${signal}，关闭中...`)
-    server.close(() => process.exit(0))
-    setTimeout(() => process.exit(1), 3000).unref()
+    process.on('SIGINT', gracefulShutdown('SIGINT'))
+    process.on('SIGTERM', gracefulShutdown('SIGTERM'))
 }
-process.on('SIGINT', gracefulShutdown('SIGINT'))
-process.on('SIGTERM', gracefulShutdown('SIGTERM'))

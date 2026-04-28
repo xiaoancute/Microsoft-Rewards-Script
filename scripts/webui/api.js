@@ -18,6 +18,11 @@ import {
     safeRemoveDirectory,
     validateDeletionPath
 } from '../utils.js'
+import {
+    detectRuntime,
+    buildCapabilities,
+    readExternalRunStatus
+} from './runtime.js'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Path helpers
@@ -344,7 +349,7 @@ export async function saveConfig(projectRoot, next) {
 // Status
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function getStatus(projectRoot, runner) {
+export function getStatus(projectRoot, runner, options = {}) {
     const distBuilt = fs.existsSync(path.join(projectRoot, 'dist', 'index.js'))
     const accounts = baseLoadAccounts(projectRoot, false)
     const config = baseLoadConfig(projectRoot, false)
@@ -352,6 +357,9 @@ export function getStatus(projectRoot, runner) {
     const canonicalConfig = configPath(projectRoot)
     const accountsSource = accounts?.path && accounts.path !== accountsExamplePath(projectRoot) ? accounts.path : null
     const configSource = config?.path && config.path !== configExamplePath(projectRoot) ? config.path : null
+    const runtime = detectRuntime(options.env || process.env)
+    const capabilities = buildCapabilities(runtime, { platform: options.platform || process.platform })
+    const externalRun = readExternalRunStatus(runtime, options.externalRunOptions)
     return {
         nodeVersion: process.version,
         projectRoot,
@@ -364,6 +372,9 @@ export function getStatus(projectRoot, runner) {
         canonicalConfigExists: fs.existsSync(canonicalConfig),
         canonicalAccountsPath: canonicalAccounts,
         canonicalConfigPath: canonicalConfig,
+        runtime,
+        capabilities,
+        externalRun,
         jobs: runner.snapshot()
     }
 }

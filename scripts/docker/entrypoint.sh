@@ -349,37 +349,18 @@ if [ "${RUN_ON_START:-false}" = "true" ]; then
   echo "[entrypoint] 后台进程已启动 (PID: $!)"
 fi
 
-# 设置 cron 任务
+# 设置 cron 任务（真正启动由 supervisor 负责）
 if [ -f "/etc/cron.d/microsoft-rewards-cron.template" ]; then
-    # 替换模板中的占位符
     CRON_SCHEDULE_ESCAPED=$(echo "$CRON_SCHEDULE" | sed 's/\*/\\*/g')
-    echo "DEBUG: CRON_SCHEDULE_ESCAPED=$CRON_SCHEDULE_ESCAPED"
-    echo "DEBUG: TZ=$TZ"
-    echo "DEBUG: Before sed - template content:"
-    cat /etc/cron.d/microsoft-rewards-cron.template
     sed -i "s|\${CRON_SCHEDULE}|$CRON_SCHEDULE_ESCAPED|g" /etc/cron.d/microsoft-rewards-cron.template || true
     sed -i "s|\${TZ}|$TZ|g" /etc/cron.d/microsoft-rewards-cron.template || true
-    echo "DEBUG: After sed - template content:"
-    cat /etc/cron.d/microsoft-rewards-cron.template
-
-    # 启用 cron 任务
     cp /etc/cron.d/microsoft-rewards-cron.template /etc/cron.d/microsoft-rewards-cron
     chmod 0644 /etc/cron.d/microsoft-rewards-cron
-
-    # 启动 cron 服务
-    echo "正在启动 cron 服务..."
-    service cron start
-
-    # 检查 cron 服务状态
-    if service cron status; then
-        echo "Cron 服务启动成功"
-    else
-        echo "警告: Cron 服务启动失败"
-    fi
+    echo "[entrypoint] cron 配置已写入 /etc/cron.d/microsoft-rewards-cron"
 else
     echo "警告: 在 /etc/cron.d/microsoft-rewards-cron.template 找不到 Cron 模板"
 fi
 
-# 启动应用
-echo "正在启动 Microsoft Rewards 脚本..."
+# 启动 supervisor / 覆盖命令
+echo "[entrypoint] 启动命令: $*"
 exec "$@"

@@ -52,3 +52,44 @@ test('diagnoseEnvironment uses legacy config path when deriving session director
     assert.equal(sessionsCheck?.ok, true)
     assert.match(sessionsCheck?.value || '', /^1 个账号/)
 })
+
+test('getStatus reports docker runtime capabilities and external run state', async () => {
+    const projectRoot = await makeProjectRoot()
+    await fs.mkdir(path.join(projectRoot, 'config'), { recursive: true })
+    await fs.mkdir(path.join(projectRoot, 'dist'), { recursive: true })
+    await fs.mkdir(path.join(projectRoot, 'src'), { recursive: true })
+
+    await fs.writeFile(path.join(projectRoot, 'dist', 'index.js'), '// built')
+    await fs.writeFile(path.join(projectRoot, 'config', 'config.json'), JSON.stringify(minimalConfig('docker-config')))
+    await fs.writeFile(path.join(projectRoot, 'config', 'accounts.json'), JSON.stringify([{ email: 'docker@example.com' }]))
+    await fs.writeFile(path.join(projectRoot, 'src', 'config.example.json'), JSON.stringify(minimalConfig('docker-config')))
+    await fs.writeFile(path.join(projectRoot, 'src', 'accounts.example.json'), JSON.stringify([{ email: 'docker@example.com' }]))
+
+    const originalEnv = {
+        MRS_RUNTIME_MODE: process.env.MRS_RUNTIME_MODE,
+        WEBUI_ENABLED: process.env.WEBUI_ENABLED
+    }
+
+    process.env.MRS_RUNTIME_MODE = 'docker'
+    process.env.WEBUI_ENABLED = 'true'
+
+    try {
+        const status = getStatus(projectRoot, { snapshot() { return [] } })
+
+        assert.equal(status.runtime?.mode, 'docker')
+        assert.equal(status.runtime?.isDocker, true)
+        assert.equal(status.runtime?.webuiEnabled, true)
+        assert.equal(status.capabilities?.canOpenBrowserSession, false)
+        assert.equal(status.capabilities?.canManageSystemd, false)
+        assert.equal(status.capabilities?.canBuildProject, false)
+        assert.equal(status.capabilities?.canRunNow, true)
+        assert.equal(status.capabilities?.canViewReports, true)
+        assert.equal(status.capabilities?.canViewLogHistory, true)
+        assert.equal(status.externalRun?.active, false)
+    } finally {
+        if (originalEnv.MRS_RUNTIME_MODE === undefined) delete process.env.MRS_RUNTIME_MODE
+        else process.env.MRS_RUNTIME_MODE = originalEnv.MRS_RUNTIME_MODE
+        if (originalEnv.WEBUI_ENABLED === undefined) delete process.env.WEBUI_ENABLED
+        else process.env.WEBUI_ENABLED = originalEnv.WEBUI_ENABLED
+    }
+})

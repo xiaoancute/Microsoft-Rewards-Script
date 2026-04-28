@@ -6,6 +6,10 @@ services:
         volumes:
             - ./config:/usr/src/microsoft-rewards-script/config
             - ./sessions:/usr/src/microsoft-rewards-script/sessions
+            - ./logs:/usr/src/microsoft-rewards-script/logs
+            - ./reports:/usr/src/microsoft-rewards-script/reports
+        ports:
+            - '3000:3000'
         environment:
             # ── Scheduling ───────────────────────────────────────────────────
             TZ: "Asia/Shanghai" # Set your timezone for proper scheduling
@@ -13,6 +17,10 @@ services:
             CRON_SCHEDULE: '0 7 * * *' # use crontab.guru to customize your schedule
             RUN_ON_START: 'true' # run script immediately on container start
             SKIP_RANDOM_SLEEP: 'false'
+            WEBUI_ENABLED: 'true'
+            WEBUI_HOST: '0.0.0.0'
+            WEBUI_PORT: '3000'
+            WEBUI_TOKEN: ${WEBUI_TOKEN:-change-this-docker-webui-token}
             #MIN_SLEEP_MINUTES: "5"
             #MAX_SLEEP_MINUTES: "50"
             #STUCK_PROCESS_TIMEOUT_HOURS: "8"
