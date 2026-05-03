@@ -1,6 +1,6 @@
 # 微软奖励脚本
 
-自动化完成 Microsoft Rewards（必应奖励）的每日任务，使用 TypeScript + Playwright 编写。
+自动化完成 Microsoft Rewards的每日任务，使用 TypeScript + Playwright 编写。
 
 本项目 fork 自 [TheNetsky/Microsoft-Rewards-Script](https://github.com/TheNetsky/Microsoft-Rewards-Script) ，主要做了**中文本地化**（中文热搜词、日志翻译、PushPlus 推送等），方便国内用户使用。感谢原作者。若有侵权请联系删除。
 
