@@ -140,3 +140,62 @@ test('BrowserFunc.getBrowserEarnablePoints includes punch cards, special promoti
     assert.equal(points.modernPanelPoints, 30)
     assert.equal(points.totalEarnablePoints, 180)
 })
+
+test('BrowserFunc.getBrowserEarnablePoints counts level benefits cards that require browser fallback', async () => {
+    const BrowserFunc = await loadBrowserFunc()
+
+    const bot = {
+        rewardsVersion: 'modern',
+        panelData: {
+            flyoutResult: {
+                dailyCheckInPromotion: null,
+                streakPromotion: null,
+                streakBonusPromotions: [],
+                levelInfoPromotion: null,
+                levelBenefitsPromotion: {
+                    offerId: 'level-gold-1',
+                    title: 'Level Gold Benefits',
+                    promotionType: 'urlreward',
+                    destinationUrl: 'https://rewards.bing.com/level-benefits/gold',
+                    pointProgressMax: 20,
+                    pointProgress: 5,
+                    activityProgressMax: 20,
+                    complete: false,
+                    hash: '',
+                    activityType: ''
+                }
+            }
+        },
+        utils: {
+            getFormattedDate() {
+                return '04/22/2026'
+            }
+        },
+        logger: {
+            info() {},
+            debug() {},
+            warn() {},
+            error() {}
+        }
+    }
+
+    const browserFunc = new BrowserFunc(bot)
+    browserFunc.getDashboardData = async () => ({
+        userStatus: {
+            counters: {
+                pcSearch: [],
+                mobileSearch: []
+            }
+        },
+        dailySetPromotions: {},
+        morePromotions: [],
+        morePromotionsWithoutPromotionalItems: [],
+        punchCards: [],
+        promotionalItems: []
+    })
+
+    const points = await browserFunc.getBrowserEarnablePoints()
+
+    assert.equal(points.modernPanelPoints, 15)
+    assert.equal(points.totalEarnablePoints, 15)
+})

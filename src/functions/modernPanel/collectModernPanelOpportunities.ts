@@ -146,6 +146,15 @@ function isValidUrlRewardPromotion(promotion: PromotionLike): boolean {
     return getPromotionType(promotion) === 'urlreward' && hasExecutionContractFields(promotion)
 }
 
+function canUseLevelBrowserFallback(source: ModernOpportunitySource, promotion: PromotionLike): boolean {
+    return (
+        source === ModernOpportunitySource.Level &&
+        getPromotionType(promotion) === 'urlreward' &&
+        hasValidDestination(promotion) &&
+        hasPositiveActionability(promotion)
+    )
+}
+
 function isQuizPromotion(promotion: PromotionLike): boolean {
     return getPromotionType(promotion) === 'quiz'
 }
@@ -308,7 +317,7 @@ function classifyOpportunity(
     const autoQuizOrPoll = (isPollPromotion(promotion) || isQuizPromotion(promotion)) && positiveActionability
     const autoUrlReward = isValidUrlRewardPromotion(promotion) && positiveActionability
 
-    if (autoQuizOrPoll || autoUrlReward) {
+    if (autoQuizOrPoll || autoUrlReward || canUseLevelBrowserFallback(source, promotion)) {
         return {
             decision: ModernOpportunityDecision.Auto,
             reason: ModernOpportunityReason.AutoExecutable

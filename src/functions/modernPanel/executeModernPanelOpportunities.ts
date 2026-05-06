@@ -5,6 +5,7 @@ import { RiskControlDetectedError } from '../../browser/RiskControlDetector'
 import {
     ModernOpportunityDecision,
     ModernOpportunityKind,
+    ModernOpportunitySource,
     type ModernPanelOpportunity
 } from './types'
 
@@ -14,6 +15,22 @@ function getPromotion(promotion: unknown): null | BasePromotion {
     }
 
     return promotion as BasePromotion
+}
+
+function hasText(value: unknown): boolean {
+    return typeof value === 'string' && value.trim().length > 0
+}
+
+function shouldUseBrowserUrlRewardFallback(opportunity: ModernPanelOpportunity, promotion: BasePromotion): boolean {
+    if (!opportunity.offerId) {
+        return true
+    }
+
+    return (
+        opportunity.source === ModernOpportunitySource.Level &&
+        !!promotion.destinationUrl?.trim() &&
+        (!hasText(promotion.hash) || !hasText(promotion.activityType))
+    )
 }
 
 export async function executeModernPanelOpportunities(
@@ -73,7 +90,7 @@ export async function executeModernPanelOpportunities(
 
                     if (name.includes('exploreonbing') && opportunity.offerId) {
                         await bot.activities.doSearchOnBing(promotion, page)
-                    } else if (!opportunity.offerId) {
+                    } else if (shouldUseBrowserUrlRewardFallback(opportunity, promotion)) {
                         await bot.activities.doOpenUrlReward(promotion, page)
                     } else {
                         await bot.activities.doDaily(promotion)

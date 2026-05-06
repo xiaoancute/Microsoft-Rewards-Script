@@ -346,6 +346,48 @@ test('Workers.doModernPanelPromotions routes blank-offerId urlreward cards throu
     assert.match(modernActivityLogs[0], /opportunityKey=level\|urlreward\|urlreward\|https:\/\/rewards\.bing\.com\/level-benefits\|blank urlreward\|unknown/)
 })
 
+test('Workers.doModernPanelPromotions routes level urlreward cards missing api fields through browser url visits', async () => {
+    const Workers = await loadWorkers()
+    const { bot, logs, dispatchCalls, getWaitCalls, getRandomDelayCalls } = createBot()
+    const workers = new Workers(bot)
+    const page = { tag: 'modern-page' }
+
+    await workers.doModernPanelPromotions(
+        {
+            flyoutResult: {
+                levelBenefitsPromotion: makePromotion({
+                    offerId: 'level-gold-1',
+                    title: 'Level Gold Benefits',
+                    promotionType: 'urlreward',
+                    destinationUrl: 'https://rewards.bing.com/level-benefits/gold',
+                    pointProgressMax: 20,
+                    activityProgressMax: 20,
+                    hash: '',
+                    activityType: ''
+                })
+            }
+        },
+        {
+            morePromotions: [],
+            dailySetPromotions: {},
+            morePromotionsWithoutPromotionalItems: []
+        },
+        page
+    )
+
+    assert.deepEqual(dispatchCalls, [['browser-urlreward', 'level-gold-1', page]])
+    assert.equal(getWaitCalls(), 1)
+    assert.equal(getRandomDelayCalls(), 1)
+
+    const modernActivityLogs = logs
+        .filter((entry) => entry[0] === 'info' && entry[1] === false && entry[2] === 'MODERN-ACTIVITY')
+        .map((entry) => entry[3])
+
+    assert.equal(modernActivityLogs.length, 1)
+    assert.match(modernActivityLogs[0], /offerId=level-gold-1/)
+    assert.match(modernActivityLogs[0], /decision=auto/)
+})
+
 test('Workers.doModernPanelPromotions logs diagnostic state for unknown offer ids', async () => {
     const Workers = await loadWorkers()
     const { bot, logs, dispatchCalls, getWaitCalls, getRandomDelayCalls } = createBot()

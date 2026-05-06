@@ -160,12 +160,12 @@ test('collectModernPanelOpportunities skips malformed urlreward missing executio
 
     const panelData = {
         flyoutResult: {
-            levelBenefitsPromotion: makePromotion({
+            streakBonusPromotions: [makePromotion({
                 offerId: 'urlreward-malformed-1',
                 promotionType: 'urlreward',
                 hash: '',
                 activityType: ''
-            })
+            })]
         }
     }
 
@@ -180,6 +180,35 @@ test('collectModernPanelOpportunities skips malformed urlreward missing executio
     assert.equal(opportunity.kind, 'urlreward')
     assert.equal(opportunity.decision, 'skip')
     assert.equal(opportunity.reason, 'unsupported-promotion-type')
+})
+
+test('collectModernPanelOpportunities auto-runs level urlreward entries with offer ids when browser fallback is possible', async () => {
+    const { collectModernPanelOpportunities } = await loadCollector()
+
+    const panelData = {
+        flyoutResult: {
+            levelBenefitsPromotion: makePromotion({
+                offerId: 'level-gold-1',
+                title: 'Level Gold Benefits',
+                promotionType: 'urlreward',
+                destinationUrl: 'https://rewards.bing.com/level-benefits/gold',
+                hash: '',
+                activityType: ''
+            })
+        }
+    }
+
+    const [opportunity] = collectModernPanelOpportunities(panelData, {
+        morePromotions: [],
+        dailySetPromotions: {},
+        morePromotionsWithoutPromotionalItems: []
+    })
+
+    assert.ok(opportunity)
+    assert.equal(opportunity.offerId, 'level-gold-1')
+    assert.equal(opportunity.kind, 'urlreward')
+    assert.equal(opportunity.decision, 'auto')
+    assert.equal(opportunity.reason, 'auto-executable')
 })
 
 test('collectModernPanelOpportunities skips zero-point quiz and poll entries', async () => {
