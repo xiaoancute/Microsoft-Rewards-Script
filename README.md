@@ -1,29 +1,48 @@
 # 微软奖励脚本
 
-自动化完成 Microsoft Rewards的每日任务，使用 TypeScript + Playwright 编写。
+一个尽量省心、适合中文用户的 Microsoft Rewards 自动化脚本。  
+基于 TypeScript + Patchright（Playwright 兼容）实现，支持多账号、会话持久化、本地 Web 管理页、Docker 和定时运行。
 
-本项目 fork 自 [TheNetsky/Microsoft-Rewards-Script](https://github.com/TheNetsky/Microsoft-Rewards-Script) ，主要做了**中文本地化**（中文热搜词、日志翻译、PushPlus 推送等），方便国内用户使用。感谢原作者。若有侵权请联系删除。
+本项目 fork 自 [TheNetsky/Microsoft-Rewards-Script](https://github.com/TheNetsky/Microsoft-Rewards-Script)，在上游基础上增加了中文本地化、中文热搜、PushPlus、Web 管理页、Linux 一键脚本等更适合中文用户自用的能力。感谢原作者。
 
-> 最后一次同步上游：见 git log（近期通常每月一次）。fork 特有功能在 `CLAUDE.md` 有完整说明。
-
----
-
-## ✨ 功能
-
-- ✅ 多账户并行、会话持久化、2FA / 无密码登录
-- ✅ 桌面 + 移动端搜索、中文热搜词
-- ✅ 每日任务、打卡、签到、阅读赚取、测验、投票、此或彼
-- ✅ 地理位置定位、代理支持
-- ✅ Discord / ntfy / **PushPlus**（微信）通知
-- ✅ Docker 定时任务 + 本地日志保存
-- ✅ 集群多账户并发
-- ✅ **小白友好的本地 Web 管理页**：点鼠标加账号、登录、改配置、跑任务、看日志
+> 最后一次同步上游：见 `git log`。  
+> fork 独有行为与额外说明可参考 `CLAUDE.md`。
 
 ---
 
-## 🐧 Linux 部署（推荐新手看这里）
+## 这个项目适合谁
 
-### 方式零：三条命令一把梭（最推荐）
+适合：
+
+- 想长期自用 Microsoft Rewards 的人
+- 想少改 JSON，更多通过网页管理账号、会话、配置和日志的人
+- 想在 Linux / Docker / VPS 上稳定跑的人
+
+不太适合：
+
+- 想零风险使用自动化的人
+- 不愿意手动处理首次登录、验证码、风控提示的人
+- 想把它当成“永不维护”的一次性脚本的人
+
+---
+
+## 它能做什么
+
+- 多账户运行、会话持久化、2FA / 无密码登录
+- 桌面 + 移动端搜索、中文热搜词
+- 每日任务、打卡、签到、阅读赚取、测验、投票、此或彼
+- 地理位置定位、代理支持
+- Discord / ntfy / PushPlus 通知
+- Docker 定时运行 + 本地日志保存
+- 本地 Web 管理页：账号、Session、配置、定时、环境、运行日志、历史日志、收益报表
+
+---
+
+## 从这里开始
+
+### 我是第一次用
+
+推荐直接走 Linux / macOS 终端下的一键路径：
 
 ```bash
 git clone https://github.com/<你的用户名>/Microsoft-Rewards-Script.git
@@ -31,236 +50,397 @@ cd Microsoft-Rewards-Script
 ./setup.sh && ./manage.sh
 ```
 
-- `setup.sh` 自动装 Node 24（用 nvm，不污染系统）、npm 依赖、Chromium 浏览器 + 系统库，识别 Debian/Ubuntu/Arch/Fedora/openSUSE/Alpine。
-- `manage.sh` 启动本地 Web 管理页（默认 <http://127.0.0.1:3000>），自动打开浏览器。在页面里：
-  - 「账号」Tab 点 `+ 添加账号` 填邮箱和密码
-  - 「Session」Tab 点 `打开浏览器` → 弹出 Chromium 让你手动登录，关窗后 session 自动保存
-  - 「配置」Tab 勾选任务开关、调搜索间隔
-  - 「运行 & 日志」Tab 点 `立即运行`，日志实时滚动
-- 想让脚本每天自动跑（不用 Docker）：`scripts/linux/install-systemd.sh`，装完就是 systemd user timer。
+跑完之后：
 
-> 不想开 Web 页？`./run.sh` 立即跑一轮，就相当于 Windows 的 `run.bat`。
->
-> 远程访问管理页（如 VPS）：`WEBUI_HOST=0.0.0.0 WEBUI_TOKEN=你的长随机串 ./manage.sh`，然后用 Bearer token 登录。默认只绑 `127.0.0.1`。
+1. 打开本地管理页 `http://127.0.0.1:3000`
+2. 在「账号」里添加微软账号
+3. 在「Session」里点 `打开浏览器`，手动完成一次登录
+4. 在「运行 & 日志」里点 `立即运行`
+
+如果你只想先跑一轮、不想开管理页：
+
+```bash
+./run.sh
+```
 
 ---
 
-### 方式一：Docker 部署（适合纯服务器）
+### 我已经会用，只想速查
 
-**1. 安装 Docker**（如果没装过）
+常用命令：
 
 ```bash
-# Debian / Ubuntu
-curl -fsSL https://get.docker.com | sudo sh
-sudo usermod -aG docker $USER   # 把自己加到 docker 组，重新登录后生效
+# 安装依赖
+npm install
+
+# 构建
+npm run build
+
+# 直接运行脚本
+npm start
+
+# 启动 Web 管理页
+npm run webui
+
+# 打开某个账号的登录浏览器
+npm run open-session -- -email 你的邮箱@outlook.com
+
+# 清空所有 session
+npm run clear-sessions
+
+# Docker
+docker compose up -d
+docker compose logs -f
+docker compose down
 ```
 
-**2. 拉取代码**
+关键路径：
+
+- 账号配置：`config/accounts.json`
+- 主配置：`config/config.json`
+- Session：`sessions/<邮箱>/`
+- 运行日志：`logs/YYYY-MM-DD.log`
+- 收益报表：`reports/earnings.jsonl`
+
+---
+
+## 推荐安装方式
+
+### 方式 A：Linux 一键脚本
+
+最推荐第一次用的人走这个。
 
 ```bash
 git clone https://github.com/<你的用户名>/Microsoft-Rewards-Script.git
 cd Microsoft-Rewards-Script
+./setup.sh && ./manage.sh
 ```
 
-**3. 准备配置目录**
+它会帮你做这些事：
 
-Docker 会把宿主机的 `./config`、`./sessions`、`./logs`、`./reports` 都挂载进容器。先把目录和示例文件准备好：
+- 安装 Node 24（通过 `nvm`，尽量不污染系统）
+- 安装 npm 依赖
+- 安装 Chromium 和系统库
+- 启动本地 Web 管理页
+
+支持的发行版包括：
+
+- Debian / Ubuntu
+- Arch
+- Fedora
+- openSUSE
+- Alpine
+
+管理页里最常用的 4 个动作：
+
+- 「账号」：添加 / 修改账号
+- 「Session」：打开浏览器完成手动登录
+- 「配置」：改任务开关、搜索间隔、并发数
+- 「运行 & 日志」：立即运行并看实时日志
+
+远程服务器想打开管理页：
 
 ```bash
+WEBUI_HOST=0.0.0.0 WEBUI_TOKEN=你的长随机串 ./manage.sh
+```
+
+默认只监听 `127.0.0.1`。如果暴露到公网，务必设置 `WEBUI_TOKEN`。
+
+---
+
+### 方式 B：Docker
+
+适合纯服务器、长期挂机、自带重启和挂载目录的人。
+
+#### 1. 安装 Docker
+
+```bash
+# Debian / Ubuntu
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker $USER
+```
+
+重新登录一次，让 docker 组生效。
+
+#### 2. 拉代码并准备目录
+
+```bash
+git clone https://github.com/<你的用户名>/Microsoft-Rewards-Script.git
+cd Microsoft-Rewards-Script
+
 mkdir -p config sessions logs reports
 cp src/accounts.example.json config/accounts.json
 cp src/config.example.json   config/config.json
 ```
 
-**4. 填写账号信息**
+#### 3. 填账号
 
-编辑 `config/accounts.json`，把 `email_1`、`password_1` 替换成你的真实微软账号：
+编辑：
 
-```bash
-nano config/accounts.json   # 或者用 vim / vscode 都行
+- `config/accounts.json`
+- `config/config.json`
+
+Docker 里请确保：
+
+```json
+"headless": true
 ```
 
-**5. 调整 `config/config.json`**
+#### 4. 看一下 `compose.yaml`
 
-Docker 里必须是无头模式，把 `headless` 改成 `true`：
-
-```bash
-sed -i 's/"headless": false/"headless": true/' config/config.json
-```
-
-其它选项按需调整，常用项见文末 [配置参考](#配置参考)。
-
-**6. 配置 `compose.yaml`**
-
-打开 `compose.yaml`，重点看这几行：
+重点通常只改这几个：
 
 ```yaml
-TZ: "Asia/Shanghai"          # 时区，保持不变
-CRON_SCHEDULE: '0 7 * * *'   # 每天几点跑，默认早上 7 点
-RUN_ON_START: 'true'         # 容器启动时立即跑一次
-WEBUI_ENABLED: 'true'        # 启用容器内管理页
+TZ: "Asia/Shanghai"
+CRON_SCHEDULE: '0 7 * * *'
+RUN_ON_START: 'true'
+WEBUI_ENABLED: 'true'
 WEBUI_TOKEN: '改成你自己的长随机串'
 ```
 
-> 不懂 cron 语法？到 [crontab.guru](https://crontab.guru) 生成即可。
->
-> `WEBUI_TOKEN` 一定要改，管理页 API 会要求 Bearer token。浏览器第一次打开管理页时会弹框让你输入它。
-
-**7. 启动**
+#### 5. 启动
 
 ```bash
-docker compose up -d       # 后台启动
-docker compose logs -f     # 查看实时日志，Ctrl+C 退出日志（容器不会停）
-docker compose down        # 停止容器
+docker compose up -d
+docker compose logs -f
+docker compose down
 ```
 
-管理页默认在 <http://127.0.0.1:3000>。打开后先输入 `compose.yaml` 里的 `WEBUI_TOKEN`。
+默认管理页地址：
 
-**首次登录提示**：Docker 里的管理页可以看 session、删 session，但**不能直接弹浏览器登录**。建议第一次在本地先用「方式二」或 `npm run open-session -- -email 你的邮箱@outlook.com` 完成登录，把生成好的 `sessions/` 目录带进 Docker。
+- `http://127.0.0.1:3000`
+
+第一次进入需要输入 `WEBUI_TOKEN`。
+
+Docker 下要注意：
+
+- 可以看 session、删 session、看日志、跑任务
+- 不能直接在容器里弹浏览器登录
+- 不能在容器里直接重建 TypeScript 代码
+- `config/`、`sessions/`、`logs/`、`reports/` 都在宿主机目录里持久化
+
+如果你是第一次登录，建议先在本地桌面环境完成一次 `open-session`，再把 `sessions/` 带到 Docker。
 
 ---
 
-### 方式二：手动分步（想了解 setup.sh 在做啥）
+### 方式 C：手动安装
+
+适合想清楚知道每一步做了什么的人。
 
 ```bash
 # 1. Node.js 24
 curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
-source ~/.bashrc && nvm install 24 && nvm use 24
+source ~/.bashrc
+nvm install 24
+nvm use 24
 
-# 2. 代码 + 依赖
+# 2. 拉代码并安装依赖
 git clone https://github.com/<你的用户名>/Microsoft-Rewards-Script.git
 cd Microsoft-Rewards-Script
 npm install
 
-# 3. Chromium 本体 + 系统库
+# 3. 安装 Chromium
 npx patchright install chromium
-sudo npx patchright install-deps chromium  # Debian/Ubuntu 专用
-# Arch: sudo pacman -S --needed nss atk at-spi2-atk libdrm libxkbcommon mesa libxcomposite libxdamage libxrandr libgbm libxss alsa-lib gtk3
-# Fedora: sudo dnf install nss atk at-spi2-atk libdrm libxkbcommon mesa-libgbm libXcomposite libXdamage libXrandr libXScrnSaver alsa-lib gtk3
 
-# 4. 准备配置
+# Debian / Ubuntu 额外系统库
+sudo npx patchright install-deps chromium
+```
+
+然后准备配置并运行：
+
+```bash
 mkdir -p config
 cp src/accounts.example.json config/accounts.json
 cp src/config.example.json   config/config.json
-# 然后编辑账号和偏好
 
-# 5. 构建并跑
 npm run build
-npm start              # 或 npm run webui 启动管理页
+npm start
 ```
 
-> 改了 `config/accounts.json` 或 `config/config.json` 后，下次运行立即生效。只有代码改动时，才需要重新 `npm run build`。
+> 改 `config/accounts.json` 或 `config/config.json` 后，下次运行立即生效。  
+> 只有代码改动时，才需要重新 `npm run build`。
 
 ---
 
-### 让它在 Linux 上定时跑（不想用 Docker 的话）
+## 其他平台
 
-最简单：
+### Windows
 
-```bash
-scripts/linux/install-systemd.sh     # 自动生成并启用 systemd user timer，默认每天 07:00
+```text
+1. 下载或克隆代码
+2. 运行 setup.bat
+3. 编辑 config/accounts.json
+4. 编辑 config/config.json
+5. 运行 run.bat 或 npm start
 ```
 
-改时间：编辑 `~/.config/systemd/user/microsoft-rewards.timer` 里的 `OnCalendar`，然后 `systemctl --user daemon-reload`。
+### macOS
 
-关机后也想触发（关键！）：
+基本和 Linux 手动安装一致。  
+如果要做本地定时，可参考 `scripts/mac/local.npm-start.plist` 配合 `launchctl`。
+
+### NixOS
+
+```bash
+nix develop
+xvfb-run npm start
+```
+
+或直接：
+
+```bash
+./scripts/nix/run.sh
+```
+
+---
+
+## 第一次跑通的最短路径
+
+如果你只关心“我到底先做哪几步”，照这个顺序来：
+
+1. 跑 `./setup.sh && ./manage.sh`
+2. 打开管理页
+3. 添加账号
+4. 打开浏览器完成一次手动登录
+5. 在「配置」里确认 `headless`、任务开关和搜索间隔
+6. 在「运行 & 日志」里点 `立即运行`
+7. 如果没问题，再决定要不要上 Docker 或 systemd 定时
+
+---
+
+## 常用操作速查
+
+### 运行相关
+
+```bash
+./run.sh
+npm start
+npm run webui
+```
+
+### Session 相关
+
+```bash
+npm run open-session -- -email 你的邮箱@outlook.com
+npm run clear-sessions
+```
+
+### 定时运行
+
+Linux 非 Docker 最简单：
+
+```bash
+scripts/linux/install-systemd.sh
+```
+
+如果你想让关机后也能触发：
 
 ```bash
 sudo loginctl enable-linger $USER
 ```
 
-也支持传统 crontab（详见 `scripts/linux/install-systemd.sh` 脚本打印的提示），不再赘述。
-
----
-
-## 🪟 Windows 部署
-
-1. 下载或克隆源代码
-2. 运行 `setup.bat` 一键部署（如果失败请参考上面「方式二」的手动步骤）
-3. 在 `config/accounts.json` 里填账号
-4. 按需修改 `config/config.json`
-5. 运行 `run.bat` 或 `npm start` 启动
-
-## 🍎 macOS 部署
-
-基本同 Linux「方式二」，多账户定时可用 `scripts/mac/local.npm-start.plist` 配合 `launchctl`。
-
-## ❄️ NixOS 部署
+### Docker 相关
 
 ```bash
-nix develop          # 进入 shell，自动 npm i + npm run build
-xvfb-run npm start   # 或直接 ./scripts/nix/run.sh
+docker compose up -d
+docker compose logs -f
+docker compose restart
+docker compose down
 ```
 
 ---
 
-## ⚙️ 配置文件
+## 配置怎么改
 
-### accounts.json（账号信息）
+### 你最常改的 5 项
+
+1. `config/accounts.json`
+   放账号、密码、2FA、代理
+
+2. `config/config.json -> headless`
+   Docker 必须 `true`
+
+3. `config/config.json -> clusters`
+   多账户并发数
+
+4. `config/config.json -> workers.*`
+   哪些任务要跑，哪些不要跑
+
+5. `config/config.json -> searchSettings.*`
+   搜索间隔、点击结果概率、阅读间隔、安静时段
+
+---
+
+### `accounts.json` 示例
 
 ```jsonc
 {
     "email": "your@outlook.com",
     "password": "yourpassword",
-    "totpSecret": "",           // 如果开了 2FA 填这里
-    "recoveryEmail": "",        // 辅助邮箱（可选）
-    "geoLocale": "auto",        // 地区，auto 会自动探测
+    "totpSecret": "",
+    "recoveryEmail": "",
+    "geoLocale": "auto",
     "langCode": "zh",
-    "proxy": {                  // 不用代理就留空
+    "proxy": {
         "proxyAxios": false,
         "url": "",
         "port": 0,
         "username": "",
         "password": ""
     },
-    "saveFingerprint": {        // 保存浏览器指纹，建议开
+    "saveFingerprint": {
         "mobile": true,
         "desktop": true
     }
 }
 ```
 
-### 会话目录
+### Session 存哪里
 
 登录成功后，cookie 和指纹会保存到：
 
-- 本地 / 构建后运行：`sessions/<邮箱>/`
-- Docker：宿主机 `./sessions/<邮箱>/`（由 volume 挂载）
+- 本地：`sessions/<邮箱>/`
+- Docker：宿主机 `./sessions/<邮箱>/`
 
-`config.json` 里的 `sessionPath` 现在表示“项目根目录下的目录名”，默认就是 `sessions`。
+`config.json` 里的 `sessionPath` 表示“项目根目录下的目录名”，默认是 `sessions`。
 
-**多备份这个目录**，下次运行就不用重新登录了。
+建议你定期备份这个目录。  
+只要 session 还有效，下次运行通常不用重新登录。
 
-### 不想改 JSON？用管理页
+### 不想改 JSON？直接用管理页
 
 ```bash
-./manage.sh        # 或 npm run webui
+./manage.sh
+# 或
+npm run webui
 ```
 
-环境变量：
+WebUI 相关环境变量：
 
-| 变量 | 默认 | 说明 |
-|------|------|------|
-| `WEBUI_HOST` | `127.0.0.1` | 监听地址。改 `0.0.0.0` 允许远程 |
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `WEBUI_HOST` | `127.0.0.1` | 监听地址 |
 | `WEBUI_PORT` | `3000` | 监听端口 |
-| `WEBUI_TOKEN` | 空 | 设后强制 Bearer 鉴权（远程访问必填） |
+| `WEBUI_TOKEN` | 空 | 远程访问时建议设置 |
 
 ---
 
 ## 配置参考
 
-### 核心
+### 核心配置
+
 | 设置 | 描述 | 默认值 |
 |------|------|--------|
 | `baseURL` | Microsoft Rewards 网址 | `https://rewards.bing.com` |
 | `sessionPath` | 浏览器会话目录 | `sessions` |
-| `headless` | 无头模式（Docker 必须 true） | `false` |
+| `headless` | 无头模式（Docker 必须 `true`） | `false` |
 | `clusters` | 并发账户进程数 | `1` |
-| `globalTimeout` | 操作超时（可写 `30sec`/`50sec`） | `50sec` |
+| `globalTimeout` | 操作超时（可写 `30sec` / `50sec`） | `50sec` |
 | `errorDiagnostics` | 失败时保存截图到 `diagnostics/` | `false` |
-| `searchOnBingLocalQueries` | 把查询引擎得到的词在必应本地搜而非 Google 热搜接口 | `false` |
+| `searchOnBingLocalQueries` | 用本地查询而不是 Google 热搜接口 | `false` |
 
 ### 任务开关
+
 | 设置 | 描述 | 默认值 |
 |------|------|--------|
 | `workers.doDailySet` | 每日任务集 | `true` |
@@ -271,81 +451,197 @@ xvfb-run npm start   # 或直接 ./scripts/nix/run.sh
 | `workers.doDailyCheckIn` | 每日签到 | `true` |
 | `workers.doReadToEarn` | 阅读赚取 | `true` |
 
-### 搜索 & 人性化
+### 搜索与行为设置
+
 | 设置 | 描述 | 默认值 |
 |------|------|--------|
-| `searchSettings.queryEngines` | 热搜来源（`china`/`google`/`wikipedia`/`reddit`/`local`） | `["china","local"]` |
-| `searchSettings.searchDelay` | 搜索间隔（长尾 lognormal 分布，多数靠近 min，偶尔接近 max） | `5min - 9min` |
-| `searchSettings.readDelay` | 阅读赚取文章间隔（同样走长尾） | `6min - 11min` |
-| `searchSettings.searchResultVisitTime` | 点进搜索结果后的停留时间。可写 `"20sec"` 或 `{min, max}` 随机区间 | `8sec - 45sec` |
-| `searchSettings.scrollRandomResults` | 随机分步滚动搜索页（4-8 步 `mouse.wheel` + 抖动，模拟真人而非瞬移） | `true` |
-| `searchSettings.clickRandomResults` | 点击随机结果的概率。`true`=1.0，`false`=0，或直接写 `0-1` 之间的小数 | `0.6` |
-| `searchSettings.parallelSearching` | 并行跑桌面+移动搜索（更快但更可疑） | `false` |
-| `quietHours.enabled` | 启用安静时段（真人凌晨不搜索）。`start`>`end` 自动识别为跨午夜 | `false` |
-| `quietHours.start` / `.end` | 安静区间，`"HH:MM"` 24h 制 | `01:00 / 06:00` |
+| `searchSettings.queryEngines` | 热搜来源（`china` / `google` / `wikipedia` / `reddit` / `local`） | `["china","local"]` |
+| `searchSettings.searchDelay` | 搜索间隔（lognormal 长尾分布） | `5min - 9min` |
+| `searchSettings.readDelay` | 阅读赚取文章间隔 | `6min - 11min` |
+| `searchSettings.searchResultVisitTime` | 点击搜索结果后的停留时间 | `8sec - 45sec` |
+| `searchSettings.scrollRandomResults` | 是否分步滚动搜索页 | `true` |
+| `searchSettings.clickRandomResults` | 点击随机结果的概率 | `0.6` |
+| `searchSettings.parallelSearching` | 桌面 + 移动并行搜索 | `false` |
+| `quietHours.enabled` | 启用安静时段 | `false` |
+| `quietHours.start` / `.end` | 安静区间（24h） | `01:00 / 06:00` |
 
-> 💡 **隐含的风控机制**（无配置项，直接生效）：
-> 搜索失败指数退避（8s × 2ⁿ，clamp 15min）；打字按 gamma-like 分布逐字符延迟 + 5% 思考停顿 + 空格前后减速；账号被封/暂停时 `Logger.alert()` 绕过 `webhookLogFilter` 强制推送告警；`clusters>1` 且多账号无代理时启动 WARN。
+> 项目里还有一部分“默认生效、无独立开关”的风控友好逻辑，比如搜索失败指数退避、打字停顿、集群共享 IP 告警等。这些不需要你单独配置。
 
-### 通知 webhook
+### 通知
+
 | 设置 | 描述 |
 |------|------|
 | `webhook.discord` | Discord 推送 |
 | `webhook.ntfy` | ntfy 推送 |
-| `webhook.pushplus` | PushPlus（微信）**仅推送每日汇总** |
+| `webhook.pushplus` | PushPlus（微信，仅每日汇总） |
 
-PushPlus 填 `token` 即可（[pushplus.plus](https://pushplus.plus) 申请）。
-
----
-
-## 🛠️ 常见问题
-
-**Q：`Error: browserType.launch: Executable doesn't exist`**
-A：Chromium 没装。跑 `npx patchright install chromium`。Linux 还可能缺系统库，跑 `sudo npx patchright install-deps chromium`（或管理页「环境」Tab 点「Chromium 系统库」一键修）。
-
-**Q：`Missing X server or $DISPLAY` / 管理页运行失败但终端直接 `npm start` 就行**
-A：管理页被装成了 systemd user service，systemd user 默认不继承桌面会话的 `$DISPLAY`，所以只能 `headless: true` 跑。生产就开 headless；要看着浏览器跑，从桌面终端手动 `npm start`（那个 shell 有 DISPLAY）。非要让 systemd 起的管理页也有头，选项见 `CLAUDE.md` 或[相关 issue/commit]。
-
-**Q：登录时一直卡在密码页 / 人机验证**
-A：用 `npm run open-session -- -email 你的邮箱@outlook.com` 在桌面终端里跑一次，弹出窗口手动完成登录（验证码也能过），会话保存后再回到管理页就自动了。别在无头模式下调登录——看不到页面排查不了。
-
-**Q：改了 `config.json`/`accounts.json` 没生效**
-A：现在统一读项目根目录的 `config/config.json` 和 `config/accounts.json`。改完后，下次运行立即生效；只有改了 TypeScript 代码才需要重新 `npm run build`。Docker 跑的话编辑 `./config/*.json` 后 `docker compose restart` 就生效。
-
-**Q：多账户怎么跑得更快？**
-A：在管理页「配置」Tab 把 `clusters` 调大（比如账号数 / 2）。注意每个进程一份 Chromium 很吃内存，而且**多账号共享同一出口 IP 很容易被批量封号**——建议每账号配独立代理（没配的话启动时会有 WARN）。
-
-**Q：管理页显示「403 默认仅允许本机访问」**
-A：你在远程机子（VPS）上起了 `./manage.sh`。要么 SSH 端口转发 `ssh -L 3000:127.0.0.1:3000 user@server`，要么 `WEBUI_HOST=0.0.0.0 WEBUI_TOKEN=<长随机串> ./manage.sh`（推荐设强 token，不要裸开公网）。
-
-**Q：Docker 容器跑起来但没输出日志**
-A：跑 `./diagnose-cron.sh <容器名>` 诊断 cron 状态，或者 `docker compose logs -f`。
-
-**Q：管理页能在 Docker 里用吗？**
-A：**现在可以**。`docker compose up -d` 会同时起 cron 和 WebUI，默认地址是 <http://127.0.0.1:3000>。注意容器里不支持「打开浏览器登录」、systemd 定时管理、在镜像内重新构建 TypeScript 代码；这些按钮会在页面里禁用或切成只读说明。
-
-**Q：我被封号了怎么办？**
-A：①停掉该账号（管理页「账号」Tab 删掉，或临时 `accounts.json` 里注释掉）。②看是不是 IP 被标——多账号共享 IP / VPS IP 段被批量封是常见原因。③封号告警会通过 Discord/ntfy/PushPlus 强制推送（即便你设了 `webhookLogFilter`），可以据此定位什么时候被封的。
+PushPlus 只需要填 `token`。  
+官网：<https://pushplus.plus>
 
 ---
 
-## 📝 更新日志
+## 日志、报表、排障文件在哪
+
+这是最常被问到的一块，单独放这里。
+
+- 运行日志：`logs/YYYY-MM-DD.log`
+- 收益报表：`reports/earnings.jsonl`
+- Session：`sessions/<邮箱>/`
+- 错误截图（如果打开 `errorDiagnostics`）：`diagnostics/`
+
+WebUI 里对应关系：
+
+- 「运行 & 日志」：看当前这次运行的实时输出
+- 「历史日志」：看 `logs/` 里的按天日志
+- 「收益报表」：看 `reports/earnings.jsonl` 聚合结果
+
+如果你要找我继续排障，最有用的通常是：
+
+1. `logs/今天日期.log`
+2. 如果是收益异常，再加 `reports/earnings.jsonl`
+
+---
+
+## 常见问题
+
+### `Error: browserType.launch: Executable doesn't exist`
+
+Chromium 没装好。
+
+```bash
+npx patchright install chromium
+```
+
+Linux 还可能缺系统库：
+
+```bash
+sudo npx patchright install-deps chromium
+```
+
+或者用管理页「环境」里的修复入口。
+
+### `Missing X server or $DISPLAY`
+
+常见于 Linux 下把管理页装成 systemd user service 后，又想看有头浏览器。
+
+简单理解：
+
+- systemd user 默认拿不到桌面会话里的 `$DISPLAY`
+- 所以它更适合跑 `headless: true`
+- 想看着浏览器登录，请从桌面终端手动运行
+
+### 登录卡在密码页 / 人机验证 / 验证码
+
+先别在无头模式里硬调。
+
+直接跑：
+
+```bash
+npm run open-session -- -email 你的邮箱@outlook.com
+```
+
+弹出浏览器后手动走完一次登录，session 保存成功后，后续自动运行通常就顺很多。
+
+### 改了 `config.json` 或 `accounts.json` 没生效
+
+现在统一读取：
+
+- `config/config.json`
+- `config/accounts.json`
+
+改完后：
+
+- 本地运行：下次启动立即生效
+- Docker：`docker compose restart`
+
+只有改了 TypeScript 代码，才需要重新 `npm run build`。
+
+### 多账户怎么更快
+
+把 `clusters` 调大。
+
+但要注意：
+
+- 每个进程都会占用更多内存
+- 多账号共用同一出口 IP，风险会明显上升
+- 如果没有独立代理，建议不要盲目开很高并发
+
+### 管理页显示「403 默认仅允许本机访问」
+
+说明你在远程服务器上直接起了本地模式管理页。
+
+两个常见方案：
+
+1. SSH 端口转发
+
+```bash
+ssh -L 3000:127.0.0.1:3000 user@server
+```
+
+2. 允许远程访问并设置 token
+
+```bash
+WEBUI_HOST=0.0.0.0 WEBUI_TOKEN=你的长随机串 ./manage.sh
+```
+
+### Docker 容器跑了但没看到日志
+
+先看：
+
+```bash
+docker compose logs -f
+```
+
+再看：
+
+```bash
+./diagnose-cron.sh <容器名>
+```
+
+### Docker 里的管理页到底能不能用
+
+现在可以。
+
+但它不是“桌面版功能 100% 原样复制”。
+
+Docker 模式下：
+
+- 可以看账号、配置、日志、收益、session
+- 可以立即触发任务
+- 不支持直接弹浏览器登录
+- 不支持 systemd 管理
+- 不支持在容器里重新构建 TypeScript 代码
+
+### 我被封号了怎么办
+
+建议顺序：
+
+1. 先停掉该账号
+2. 看是不是 IP 风险，而不是账号本身问题
+3. 看历史日志和告警时间点，定位是登录出问题还是搜索行为过猛
+
+如果你是多账号共用 VPS IP，被一起风控并不罕见。
+
+---
+
+## 更新日志
 
 - 2025-06-24 添加移动端活动领取
 - 2025-06-25 添加中文热搜
 - 2025-07-10 允许 `useLocale` 自定义地区
 - 2025-07-26 添加本地日志保存
 - 2025-11-11 改回 npm 管理（pnpm 导致编译问题）；补充 Docker 说明
-- 2026-04-19 上线一套大更新：
-  - 🎁 **本地 Web 管理页**：账号 / Session / 配置 / 定时 / 环境 / 运行日志 / 历史日志 7 个 Tab，日间 + 夜间模式
-  - 🐧 **Linux 一键脚本**：`setup.sh` / `run.sh` / `manage.sh`，识别 Debian/Ubuntu/Arch/Fedora/openSUSE/Alpine
-  - ⏰ **systemd user timer** 一键安装（Web UI 也能自启）
-  - 🧠 **行为人性化**：搜索/阅读/停留间隔改 lognormal 长尾分布、滚动改真实 `mouse.wheel` 分步、打字改 gamma-like delay + 思考停顿 + 词边界减速、点击结果改概率化（默认 0.6）、新增 `quietHours` 安静时段
-  - 🛡️ **风控增强**：搜索失败指数退避（8s×2ⁿ clamp 15min）、dashboard 主动检测 `#suspendedAccountHeader`、封号告警独立通道绕过 webhookLogFilter、集群共享 IP 启动 WARN、Chromium args 对齐上游 v3
-  - 🧹 **文档对齐代码**：删掉 README 里代码从未实现的字段（`runOnZeroPoints` / `humanization.*` / `stopOnBan` 等虚假承诺）
+- 2026-04-19 上线本地 Web 管理页、Linux 一键脚本、systemd 定时与更人性化的行为模拟
 
 ---
 
-## ⚠️ 免责声明
+## 免责声明
 
-**风险自负！** 使用自动化脚本可能导致 Microsoft Rewards 账户被暂停或封禁。本脚本仅供学习研究，因使用本脚本导致的任何账户问题，作者概不负责。
+使用自动化脚本存在风险，包括但不限于：
+
+- 账号被暂停
+- 任务收益异常
+- 登录需要人工重新验证
+
+请把它当成“自担风险的个人工具”，不是官方支持方案。  
+本项目仅供学习和研究使用，因使用脚本导致的任何账号问题，作者不承担责任。
