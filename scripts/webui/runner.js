@@ -1,9 +1,43 @@
+import fs from 'fs'
 import { spawn } from 'child_process'
 import { EventEmitter } from 'events'
 import path from 'path'
 
 const MAX_LOG_LINES = 2000
 const STOP_TIMEOUT_MS = 5000
+
+function getPathKey(env = {}) {
+    return Object.keys(env).find(key => key.toLowerCase() === 'path') || 'PATH'
+}
+
+function getCurrentNodeBinDir() {
+    return path.dirname(process.execPath)
+}
+
+export function buildNodeAwareEnv(baseEnv = {}) {
+    const env = { ...baseEnv }
+    const pathKey = getPathKey(env)
+    const currentPath = env[pathKey] || ''
+    const nodeBinDir = getCurrentNodeBinDir()
+    const pathParts = String(currentPath)
+        .split(path.delimiter)
+        .filter(Boolean)
+        .filter(entry => entry !== nodeBinDir)
+
+    env[pathKey] = [nodeBinDir, ...pathParts].join(path.delimiter)
+    return env
+}
+
+export function getPreferredNpmCommand() {
+    const npmName = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+    const bundledNpm = path.join(getCurrentNodeBinDir(), npmName)
+
+    if (fs.existsSync(bundledNpm)) {
+        return bundledNpm
+    }
+
+    return npmName
+}
 
 // One-shot jobs (npm start, npm run build) are singletons per job-kind. The
 // per-email "open" job (a headed browser window for manual login) may run
@@ -126,7 +160,7 @@ export class Runner extends EventEmitter {
     spawnJob({ kind, label, command, args, env }) {
         const proc = spawn(command, args, {
             cwd: this.projectRoot,
-            env: { ...process.env, ...(env || {}) },
+            env: buildNodeAwareEnv({ ...process.env, ...(env || {}) }),
             stdio: ['ignore', 'pipe', 'pipe'],
             shell: false
         })
@@ -156,12 +190,11 @@ export class Runner extends EventEmitter {
             throw err
         }
         // Use `npm run <script>` for non-lifecycle names, and `npm <script>` for start/build/etc
-        const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm'
         const args = ['run', script]
         return this.spawnJob({
             kind: script,
             label: label || `npm run ${script}`,
-            command: npmCmd,
+            command: getPreferredNpmCommand(),
             args
         })
     }
@@ -174,11 +207,10 @@ export class Runner extends EventEmitter {
             err.status = 409
             throw err
         }
-        const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm'
         return this.spawnJob({
             kind: 'start',
             label: 'npm start',
-            command: npmCmd,
+            command: getPreferredNpmCommand(),
             args: ['start']
         })
     }

@@ -50,6 +50,11 @@ function atomicWrite(filePath, content) {
 }
 
 function findNpm() {
+    const bundledNpm = path.join(path.dirname(findNode()), process.platform === 'win32' ? 'npm.cmd' : 'npm')
+    if (fs.existsSync(bundledNpm)) {
+        return bundledNpm
+    }
+
     try {
         return execFileSync(process.platform === 'win32' ? 'where' : 'which', ['npm'], { encoding: 'utf8' })
             .split('\n')[0]
@@ -71,11 +76,25 @@ function findBash() {
     }
 }
 
+export function buildNodeAwarePathValue(basePath = process.env.PATH || '') {
+    const nodeBinDir = path.dirname(findNode())
+    const pathParts = String(basePath)
+        .split(path.delimiter)
+        .filter(Boolean)
+        .filter(entry => entry !== nodeBinDir)
+
+    return [nodeBinDir, ...pathParts].join(path.delimiter)
+}
+
+function renderEnvironmentLines(values = []) {
+    return [`PATH=${buildNodeAwarePathValue()}`, ...values].map(value => `Environment=${value}`).join('\n')
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 模板
 // ─────────────────────────────────────────────────────────────────────────────
 
-function renderRewardService(projectRoot) {
+export function renderRewardService(projectRoot) {
     const npm = findNpm()
     const bash = findBash()
     return `[Unit]
@@ -86,6 +105,7 @@ After=network-online.target
 [Service]
 Type=oneshot
 WorkingDirectory=${projectRoot}
+${renderEnvironmentLines()}
 ExecStart=${bash} -lc '${npm} start'
 TimeoutStartSec=4h
 Nice=10
@@ -116,7 +136,7 @@ WantedBy=timers.target
 `
 }
 
-function renderWebuiService(projectRoot, { host = '127.0.0.1', port = 3000, token = '' } = {}) {
+export function renderWebuiService(projectRoot, { host = '127.0.0.1', port = 3000, token = '' } = {}) {
     const node = findNode()
     const entry = path.join(projectRoot, 'scripts', 'webui', 'server.js')
     const envLines = [`WEBUI_HOST=${host}`, `WEBUI_PORT=${port}`]
@@ -129,7 +149,7 @@ After=network-online.target
 Type=simple
 WorkingDirectory=${projectRoot}
 ExecStart=${node} ${entry}
-${envLines.map(e => `Environment=${e}`).join('\n')}
+${renderEnvironmentLines(envLines)}
 Restart=on-failure
 RestartSec=3
 
