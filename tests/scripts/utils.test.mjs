@@ -4,7 +4,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { loadAccounts, loadConfig } from '../../scripts/utils.js'
+import { getProjectRoot, loadAccounts, loadConfig } from '../../scripts/utils.js'
 
 async function makeProjectRoot() {
     return await fs.mkdtemp(path.join(os.tmpdir(), 'mrs-utils-'))
@@ -79,4 +79,16 @@ test('loadAccounts falls back to src/accounts.json when config/accounts.json is 
 
     assert.equal(result.data[0].email, 'src@example.com')
     assert.equal(result.path, path.join(projectRoot, 'src', 'accounts.json'))
+})
+
+test('getProjectRoot skips nested package.json files under scripts', async () => {
+    const projectRoot = await makeProjectRoot()
+    const scriptsDir = path.join(projectRoot, 'scripts', 'webui')
+
+    await fs.mkdir(scriptsDir, { recursive: true })
+    await fs.writeFile(path.join(projectRoot, 'package.json'), JSON.stringify({ name: 'root-project' }))
+    await fs.writeFile(path.join(projectRoot, 'runtime-paths.cjs'), 'module.exports = {}')
+    await fs.writeFile(path.join(projectRoot, 'scripts', 'package.json'), JSON.stringify({ type: 'module' }))
+
+    assert.equal(getProjectRoot(scriptsDir), projectRoot)
 })

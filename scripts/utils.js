@@ -22,12 +22,27 @@ export function getDirname(importMetaUrl) {
 
 export function getProjectRoot(currentDir) {
     let dir = currentDir
+    let fallbackPackageDir = null
+
     while (dir !== path.parse(dir).root) {
         if (fs.existsSync(path.join(dir, 'package.json'))) {
-            return dir
+            const hasRootMarkers =
+                fs.existsSync(path.join(dir, 'runtime-paths.cjs')) ||
+                fs.existsSync(path.join(dir, 'tsconfig.json'))
+
+            if (hasRootMarkers) {
+                return dir
+            }
+
+            fallbackPackageDir ??= dir
         }
         dir = path.dirname(dir)
     }
+
+    if (fallbackPackageDir) {
+        return fallbackPackageDir
+    }
+
     throw new Error('找不到项目根目录 (未找到 package.json)')
 }
 

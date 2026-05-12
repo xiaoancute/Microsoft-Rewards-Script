@@ -66,6 +66,7 @@ async function startServer(envOverrides = {}) {
         try {
             const res = await fetch(`${baseUrl}/`)
             if (res.status > 0) {
+                await res.arrayBuffer()
                 return { child, baseUrl, stdout, stderr }
             }
         } catch {}
@@ -149,6 +150,14 @@ test('docker webui keeps static files public while API stays token-protected', a
     assert.equal(payload.runtime?.mode, 'docker')
     assert.equal(payload.capabilities?.canOpenBrowserSession, false)
     assert.equal(payload.capabilities?.canBuildProject, false)
+})
+
+test('webui server starts without module type warnings', async t => {
+    const server = await startServer()
+    t.after(() => stopServer(server.child))
+
+    assert.equal(server.stderr.includes('MODULE_TYPELESS_PACKAGE_JSON'), false, server.stderr)
+    assert.equal(server.stderr.includes('Reparsing as ES module'), false, server.stderr)
 })
 
 test('docker webui exposes a docker cron schedule payload instead of systemd state', async t => {
