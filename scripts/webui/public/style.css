@@ -540,6 +540,10 @@ code {
     background: rgba(79, 140, 255, 0.1);
 }
 
+.preflight-results.hidden {
+    display: none;
+}
+
 /* Tables */
 .tablewrap {
     overflow-x: auto;

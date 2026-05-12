@@ -194,14 +194,19 @@ Docker 里请确保：
 TZ: "Asia/Shanghai"
 CRON_SCHEDULE: '0 7 * * *'
 RUN_ON_START: 'true'
+MRS_INSTANCE_ID: 'default'
+LOG_RETENTION_DAYS: '90'
+REPORT_RETENTION_DAYS: '365'
 WEBUI_ENABLED: 'true'
 WEBUI_TOKEN: '改成你自己的长随机串'
 ```
 
+仓库自带的 `compose.yaml` 默认会从当前代码构建镜像，适合这个 fork 自己长期用。代码更新后重新执行 `docker compose up -d --build`。
+
 #### 5. 启动
 
 ```bash
-docker compose up -d
+docker compose up -d --build
 docker compose logs -f
 docker compose down
 ```
@@ -218,6 +223,8 @@ Docker 下要注意：
 - 不能直接在容器里弹浏览器登录
 - 不能在容器里直接重建 TypeScript 代码
 - `config/`、`sessions/`、`logs/`、`reports/` 都在宿主机目录里持久化
+- `logs/` 默认保留 90 天，`reports/earnings.jsonl` 默认保留 365 天
+- 同一台服务器跑多个实例时，请给每个实例设置不同的 `MRS_INSTANCE_ID`
 
 如果你是第一次登录，建议先在本地桌面环境完成一次 `open-session`，再把 `sessions/` 带到 Docker。
 
@@ -342,7 +349,7 @@ sudo loginctl enable-linger $USER
 ### Docker 相关
 
 ```bash
-docker compose up -d
+docker compose up -d --build
 docker compose logs -f
 docker compose restart
 docker compose down
@@ -597,6 +604,16 @@ docker compose logs -f
 ```bash
 ./diagnose-cron.sh <容器名>
 ```
+
+### Docker 更新代码后为什么没变化
+
+默认 compose 会使用当前仓库构建镜像。代码改动后需要重新构建镜像：
+
+```bash
+docker compose up -d --build
+```
+
+只改 `config/accounts.json`、`config/config.json` 或 `.env` 时，通常 `docker compose restart` 就够了。
 
 ### Docker 里的管理页到底能不能用
 

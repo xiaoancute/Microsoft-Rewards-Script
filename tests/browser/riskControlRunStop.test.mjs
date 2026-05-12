@@ -1,5 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 
 async function loadBotModule() {
     return await import('../../dist/index.js')
@@ -32,7 +35,9 @@ test('runTasks rethrows RiskControlDetectedError instead of continuing to the ne
     const { RiskControlDetectedError } = await import('../../dist/browser/RiskControlDetector.js')
 
     const bot = Object.create(MicrosoftRewardsBot.prototype)
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mrs-risk-stop-'))
     bot.config = { clusters: 2, riskControlStop: { enabled: true } }
+    bot.projectRoot = projectRoot
     bot.logger = { info() {}, warn() {}, error() {}, debug() {}, alert() {} }
     bot.userData = { userName: '' }
     bot.utils = {

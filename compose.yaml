@@ -1,6 +1,8 @@
 services:
     microsoft-rewards-script:
-        image: ghcr.io/thenetsky/microsoft-rewards-script:latest
+        build:
+            context: .
+        image: microsoft-rewards-script:local
         container_name: microsoft-rewards-script
         restart: unless-stopped
         volumes:
@@ -17,6 +19,9 @@ services:
             CRON_SCHEDULE: '0 7 * * *' # use crontab.guru to customize your schedule
             RUN_ON_START: 'true' # run script immediately on container start
             SKIP_RANDOM_SLEEP: 'false'
+            MRS_INSTANCE_ID: ${MRS_INSTANCE_ID:-default}
+            LOG_RETENTION_DAYS: ${LOG_RETENTION_DAYS:-90}
+            REPORT_RETENTION_DAYS: ${REPORT_RETENTION_DAYS:-365}
             WEBUI_ENABLED: 'true'
             WEBUI_HOST: '0.0.0.0'
             WEBUI_PORT: '3000'

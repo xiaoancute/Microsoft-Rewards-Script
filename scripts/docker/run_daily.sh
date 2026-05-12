@@ -6,7 +6,8 @@ export TZ="${TZ:-UTC}"
 
 cd /usr/src/microsoft-rewards-script
 
-LOCKFILE=/tmp/run_daily.lock
+LOCKFILE="$(node ./scripts/docker/runtime-maintenance.js lockfile)"
+mkdir -p "$(dirname "$LOCKFILE")"
 
 # -------------------------------
 #  函数: 检查并修复锁文件完整性
@@ -120,6 +121,7 @@ trap 'release_lock' EXIT INT TERM
 #  主执行流程
 # -------------------------------
 echo "[$(date)] [run_daily.sh] 当前进程PID: $$"
+echo "[$(date)] [run_daily.sh] 使用锁文件: $LOCKFILE"
 
 # 在继续之前自愈任何损坏或空锁
 self_heal_lockfile
@@ -128,6 +130,8 @@ self_heal_lockfile
 if ! acquire_lock; then
     exit 0
 fi
+
+node ./scripts/docker/runtime-maintenance.js prune /usr/src/microsoft-rewards-script || true
 
 # 在MIN和MAX之间随机休眠以分散执行
 MINWAIT=${MIN_SLEEP_MINUTES:-5}

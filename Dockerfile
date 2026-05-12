@@ -85,6 +85,7 @@ COPY --from=builder /usr/src/microsoft-rewards-script/dist ./dist
 COPY --from=builder /usr/src/microsoft-rewards-script/package*.json ./
 COPY --from=builder /usr/src/microsoft-rewards-script/node_modules ./node_modules
 COPY --from=builder /usr/src/microsoft-rewards-script/scripts/webui ./scripts/webui
+COPY --from=builder /usr/src/microsoft-rewards-script/scripts/docker ./scripts/docker
 COPY --from=builder /usr/src/microsoft-rewards-script/scripts/utils.js ./scripts/utils.js
 COPY --from=builder /usr/src/microsoft-rewards-script/runtime-paths.cjs ./runtime-paths.cjs
 COPY --from=builder /usr/src/microsoft-rewards-script/earnings-report.cjs ./earnings-report.cjs
@@ -98,8 +99,6 @@ COPY --from=builder /usr/src/microsoft-rewards-script/src/accounts.example.json 
 RUN mkdir -p ./config ./sessions ./logs ./reports
 
 # Copy runtime scripts and normalize permissions without requiring BuildKit
-COPY scripts/docker/run_daily.sh ./scripts/docker/run_daily.sh
-COPY scripts/docker/log-forwarder.sh ./scripts/docker/log-forwarder.sh
 COPY scripts/docker/supervise.sh /usr/local/bin/docker-supervise.sh
 COPY src/crontab.template /etc/cron.d/microsoft-rewards-cron.template
 COPY scripts/docker/entrypoint.sh /usr/local/bin/entrypoint.sh

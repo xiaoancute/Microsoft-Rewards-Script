@@ -9,7 +9,10 @@ const require = createRequire(import.meta.url)
 const {
     earningsFile,
     appendEarningsRun,
-    readEarningsReport
+    readEarningsReport,
+    earningsCheckpointFile,
+    writeEarningsCheckpoint,
+    recoverEarningsCheckpoint
 } = require('../../earnings-report.cjs')
 
 async function makeProjectRoot() {
@@ -50,6 +53,62 @@ test('appendEarningsRun writes a structured JSONL run record', async () => {
     assert.equal(record.totalCollectedPoints, 30)
     assert.equal(record.failedCount, 1)
     assert.equal(JSON.parse(lines[0]).accounts[1].error, '流程失败')
+})
+
+test('recoverEarningsCheckpoint appends interrupted completed accounts once', async () => {
+    const projectRoot = await makeProjectRoot()
+
+    await writeEarningsCheckpoint(projectRoot, {
+        runId: 'interrupted-run-1',
+        runStartedAt: '2026-04-24T01:00:00.000Z',
+        updatedAt: '2026-04-24T01:03:00.000Z',
+        accountStats: [
+            {
+                email: 'done@example.com',
+                initialPoints: 100,
+                finalPoints: 140,
+                collectedPoints: 40,
+                duration: 60,
+                success: true
+            }
+        ],
+        reason: 'SIGTERM',
+        hadWorkerFailure: true
+    })
+
+    const recovered = await recoverEarningsCheckpoint(projectRoot)
+    const content = await fs.readFile(earningsFile(projectRoot), 'utf8')
+    const lines = content.trim().split('\n')
+
+    assert.equal(recovered.recovered, true)
+    assert.equal(lines.length, 1)
+    assert.equal(JSON.parse(lines[0]).runId, 'interrupted-run-1')
+    assert.equal(JSON.parse(lines[0]).hadWorkerFailure, true)
+    await assert.rejects(() => fs.stat(earningsCheckpointFile(projectRoot)), /ENOENT/)
+})
+
+test('recoverEarningsCheckpoint clears already recorded checkpoints without duplicating', async () => {
+    const projectRoot = await makeProjectRoot()
+
+    await appendEarningsRun(projectRoot, {
+        runId: 'already-recorded-run',
+        runStartedAt: '2026-04-24T01:00:00.000Z',
+        runFinishedAt: '2026-04-24T01:03:00.000Z',
+        accountStats: [{ email: 'done@example.com', collectedPoints: 10, duration: 10, success: true }]
+    })
+    await writeEarningsCheckpoint(projectRoot, {
+        runId: 'already-recorded-run',
+        runStartedAt: '2026-04-24T01:00:00.000Z',
+        updatedAt: '2026-04-24T01:04:00.000Z',
+        accountStats: [{ email: 'done@example.com', collectedPoints: 10, duration: 10, success: true }]
+    })
+
+    const recovered = await recoverEarningsCheckpoint(projectRoot)
+    const content = await fs.readFile(earningsFile(projectRoot), 'utf8')
+
+    assert.equal(recovered.recovered, false)
+    assert.equal(content.trim().split('\n').length, 1)
+    await assert.rejects(() => fs.stat(earningsCheckpointFile(projectRoot)), /ENOENT/)
 })
 
 test('readEarningsReport aggregates days, accounts, failures, and risk stops', async () => {

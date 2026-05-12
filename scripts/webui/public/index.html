@@ -94,6 +94,19 @@
                 <h3>首次使用向导</h3>
                 <ol class="dash-steps" id="dash-steps"></ol>
             </div>
+            <div class="card" id="dash-preflight">
+                <div class="report-card-head">
+                    <h3>运行前体检</h3>
+                    <button class="btn btn-sm" id="btn-preflight-run">开始体检</button>
+                </div>
+                <p class="field-hint" id="preflight-summary">运行前检查 Node、构建产物、账号、Session、运行锁和目录权限。</p>
+                <div class="tablewrap preflight-results hidden" id="preflight-results">
+                    <table>
+                        <thead><tr><th>项目</th><th>状态</th><th>详情</th><th>建议</th></tr></thead>
+                        <tbody id="preflight-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
         </section>
 
         <!-- 账号 -->

@@ -18,6 +18,7 @@ import {
     getStatus
 } from './api.js'
 import { diagnoseEnvironment, fixActionsFor } from './env.js'
+import { buildPreflightReport } from './preflight.js'
 import {
     getSystemdStatus,
     installRewardTimer,
@@ -228,6 +229,17 @@ async function handleApi(req, res, url, context) {
     // GET /api/status
     if (method === 'GET' && pathname === '/api/status') {
         return sendJson(res, 200, getStatus(projectRoot, runner, { env }))
+    }
+    if (method === 'GET' && pathname === '/api/preflight') {
+        return sendJson(
+            res,
+            200,
+            buildPreflightReport(projectRoot, {
+                runtime: runtimeContext.runtime,
+                capabilities: runtimeContext.capabilities,
+                externalRun: runtimeContext.externalRun
+            })
+        )
     }
 
     // Reports

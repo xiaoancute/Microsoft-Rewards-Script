@@ -327,6 +327,60 @@ document.getElementById('dash-run-stop').addEventListener('click', async event =
     }
 })
 
+async function loadPreflight() {
+    const button = document.getElementById('btn-preflight-run')
+    const originalText = button.textContent
+    button.disabled = true
+    button.textContent = '检查中...'
+    try {
+        const report = await api('/api/preflight')
+        renderPreflight(report)
+        if (report.summary?.status === 'blocked') {
+            toast('体检发现阻断项，请先处理后再运行', 'err')
+        } else if (report.summary?.status === 'warning') {
+            toast('体检完成，有警告项需要留意', 'warn')
+        } else {
+            toast('体检通过，可以运行', 'ok')
+        }
+    } catch (err) {
+        toast(`体检失败: ${err.message}`, 'err')
+    } finally {
+        button.disabled = false
+        button.textContent = originalText
+    }
+}
+
+function renderPreflight(report) {
+    const summary = report.summary || {}
+    const summaryEl = document.getElementById('preflight-summary')
+    const results = document.getElementById('preflight-results')
+    const tbody = document.getElementById('preflight-tbody')
+    const statusLabel = {
+        ready: '可以运行',
+        warning: '可以运行，但有警告',
+        blocked: '暂不建议运行'
+    }[summary.status] || '未知'
+
+    summaryEl.innerHTML = `${preflightBadge(summary.status)} ${escapeHtml(statusLabel)} · 通过 ${summary.ok || 0} 项，警告 ${summary.warn || 0} 项，阻断 ${summary.fail || 0} 项`
+    tbody.innerHTML = (report.checks || []).map(item => `
+        <tr>
+            <td>${escapeHtml(item.label)}</td>
+            <td>${preflightBadge(item.status)}</td>
+            <td>${escapeHtml(item.detail || '-')}</td>
+            <td>${escapeHtml(item.hint || '-')}</td>
+        </tr>
+    `).join('')
+    results.classList.remove('hidden')
+}
+
+function preflightBadge(status) {
+    if (status === 'ok' || status === 'ready') return '<span class="badge ok">通过</span>'
+    if (status === 'fail' || status === 'blocked') return '<span class="badge warn">阻断</span>'
+    return '<span class="badge warn">警告</span>'
+}
+
+document.getElementById('btn-preflight-run').addEventListener('click', loadPreflight)
+
 async function loadStatus() { return loadDashboard() }
 
 // ─────────────────────────────────────────────────────────────────────────────

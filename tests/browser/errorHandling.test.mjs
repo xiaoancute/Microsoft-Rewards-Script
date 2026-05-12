@@ -1,5 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 
 function createAccount(email) {
     return {
@@ -174,8 +177,10 @@ test('runTasks exits single-process mode with code 1 when any account fails', as
     const mod = await loadBotModule()
     const { MicrosoftRewardsBot } = mod
     const bot = Object.create(MicrosoftRewardsBot.prototype)
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mrs-failed-run-'))
 
     bot.config = { clusters: 1 }
+    bot.projectRoot = projectRoot
     bot.logger = { info() {}, warn() {}, error() {}, debug() {}, alert() {} }
     bot.userData = { userName: '' }
     bot.utils = {
@@ -209,4 +214,82 @@ test('runTasks exits single-process mode with code 1 when any account fails', as
     }
 
     assert.deepEqual(exitCalls, [1])
+})
+
+test('flushPartialEarningsReport writes completed stats once during interrupted shutdown', async () => {
+    const mod = await loadBotModule()
+    const { MicrosoftRewardsBot } = mod
+    const bot = Object.create(MicrosoftRewardsBot.prototype)
+
+    const calls = []
+    bot.logger = { info() {}, warn() {}, error() {}, debug() {}, alert() {} }
+    bot.currentRunStartTime = 1760000000000
+    bot.completedAccountStats = [
+        {
+            email: 'done@example.com',
+            initialPoints: 100,
+            finalPoints: 125,
+            collectedPoints: 25,
+            duration: 30,
+            success: true
+        }
+    ]
+    bot.riskControlStopping = false
+    bot.appendEarningsReport = async (stats, runStartTime, hadWorkerFailure) => {
+        calls.push({ stats, runStartTime, hadWorkerFailure })
+    }
+
+    await bot.flushPartialEarningsReport('SIGTERM')
+    await bot.flushPartialEarningsReport('SIGTERM again')
+
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0].runStartTime, 1760000000000)
+    assert.equal(calls[0].hadWorkerFailure, true)
+    assert.equal(calls[0].stats[0].email, 'done@example.com')
+})
+
+test('runTasks keeps completed account stats available for later interrupt flushing', async () => {
+    const mod = await loadBotModule()
+    const { MicrosoftRewardsBot } = mod
+    const bot = Object.create(MicrosoftRewardsBot.prototype)
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mrs-interrupt-'))
+
+    bot.config = { clusters: 1 }
+    bot.projectRoot = projectRoot
+    bot.logger = { info() {}, warn() {}, error() {}, debug() {}, alert() {} }
+    bot.userData = { userName: '' }
+    bot.utils = {
+        getEmailUsername(email) {
+            return email.split('@')[0]
+        },
+        shuffleArray(items) {
+            return items
+        }
+    }
+    bot.sendPushPlusSummary = async () => {}
+    bot.appendEarningsReport = async () => {}
+    bot.Main = async () => ({ initialPoints: 50, collectedPoints: 15 })
+
+    const originalExit = process.exit
+    process.exit = code => {
+        throw new Error(`process.exit:${code}`)
+    }
+
+    try {
+        await assert.rejects(
+            () => bot.runTasks([createAccount('partial@example.com')], 1760000000000),
+            /process\.exit:0/
+        )
+    } finally {
+        process.exit = originalExit
+    }
+
+    assert.equal(bot.completedAccountStats.length, 1)
+    assert.equal(bot.completedAccountStats[0].email, 'partial@example.com')
+    assert.equal(bot.completedAccountStats[0].collectedPoints, 15)
+
+    await bot.earningsCheckpointPromise
+    const checkpoint = JSON.parse(await fs.readFile(path.join(projectRoot, 'reports', 'earnings.pending.json'), 'utf8'))
+    assert.equal(checkpoint.accountStats[0].email, 'partial@example.com')
+    assert.equal(checkpoint.accountStats[0].collectedPoints, 15)
 })

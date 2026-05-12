@@ -3,6 +3,7 @@ const path = require('path')
 
 const REPORT_DIR = 'reports'
 const EARNINGS_FILE = 'earnings.jsonl'
+const EARNINGS_CHECKPOINT_FILE = 'earnings.pending.json'
 const DAY_MS = 24 * 60 * 60 * 1000
 const FAILURE_BUCKET_ORDER = ['risk_control', 'login', 'session', 'network', 'flow', 'unknown']
 const FAILURE_BUCKET_LABELS = {
@@ -20,6 +21,10 @@ function reportsDir(projectRoot) {
 
 function earningsFile(projectRoot) {
     return path.join(reportsDir(projectRoot), EARNINGS_FILE)
+}
+
+function earningsCheckpointFile(projectRoot) {
+    return path.join(reportsDir(projectRoot), EARNINGS_CHECKPOINT_FILE)
 }
 
 function toIso(value) {
@@ -43,7 +48,14 @@ function normalizeAccountStat(stat) {
     }
 }
 
-function buildRunRecord({ runStartedAt, runFinishedAt, accountStats, hadWorkerFailure = false, riskControlStopped = false }) {
+function buildRunRecord({
+    runId,
+    runStartedAt,
+    runFinishedAt,
+    accountStats,
+    hadWorkerFailure = false,
+    riskControlStopped = false
+}) {
     const startedAt = toIso(runStartedAt)
     const finishedAt = toIso(runFinishedAt)
     const accounts = Array.isArray(accountStats) ? accountStats.map(normalizeAccountStat) : []
@@ -53,7 +65,7 @@ function buildRunRecord({ runStartedAt, runFinishedAt, accountStats, hadWorkerFa
 
     return {
         schemaVersion: 1,
-        runId: `${startedAt}-${process.pid}`,
+        runId: runId || `${startedAt}-${process.pid}`,
         date: dateKey(startedAt),
         startedAt,
         finishedAt,
@@ -73,6 +85,100 @@ async function appendEarningsRun(projectRoot, input) {
     await fs.promises.mkdir(reportsDir(projectRoot), { recursive: true })
     await fs.promises.appendFile(earningsFile(projectRoot), `${JSON.stringify(record)}\n`, 'utf8')
     return record
+}
+
+function normalizeCheckpoint(input) {
+    const startedAtMs = new Date(input?.runStartedAt || input?.startedAt).getTime()
+    if (!Number.isFinite(startedAtMs)) {
+        throw new Error('Invalid earnings checkpoint runStartedAt')
+    }
+
+    const runStartedAt = toIso(startedAtMs)
+    const updatedAt = toIso(input?.updatedAt || Date.now())
+    const accountStats = Array.isArray(input?.accountStats) ? input.accountStats.map(normalizeAccountStat) : []
+
+    return {
+        schemaVersion: 1,
+        runId: String(input?.runId || `${runStartedAt}-${input?.pid || process.pid}`),
+        runStartedAt,
+        updatedAt,
+        accountStats,
+        hadWorkerFailure: input?.hadWorkerFailure === undefined ? true : Boolean(input.hadWorkerFailure),
+        riskControlStopped: Boolean(input?.riskControlStopped || accountStats.some(item => item.riskControlStopped)),
+        reason: input?.reason ? String(input.reason) : undefined
+    }
+}
+
+async function writeEarningsCheckpoint(projectRoot, input) {
+    const checkpoint = normalizeCheckpoint(input)
+    await fs.promises.mkdir(reportsDir(projectRoot), { recursive: true })
+
+    const filePath = earningsCheckpointFile(projectRoot)
+    const tmpPath = `${filePath}.${process.pid}.tmp`
+    await fs.promises.writeFile(tmpPath, `${JSON.stringify(checkpoint)}\n`, 'utf8')
+    await fs.promises.rename(tmpPath, filePath)
+    return checkpoint
+}
+
+async function readEarningsCheckpoint(projectRoot) {
+    try {
+        const raw = await fs.promises.readFile(earningsCheckpointFile(projectRoot), 'utf8')
+        return normalizeCheckpoint(JSON.parse(raw))
+    } catch (error) {
+        if (error?.code === 'ENOENT') return null
+        throw error
+    }
+}
+
+async function clearEarningsCheckpoint(projectRoot, runId) {
+    if (runId) {
+        const checkpoint = await readEarningsCheckpoint(projectRoot)
+        if (!checkpoint || checkpoint.runId !== runId) {
+            return false
+        }
+    }
+
+    try {
+        await fs.promises.unlink(earningsCheckpointFile(projectRoot))
+        return true
+    } catch (error) {
+        if (error?.code === 'ENOENT') return false
+        throw error
+    }
+}
+
+function hasEarningsRun(projectRoot, runId) {
+    if (!runId) return false
+    return readJsonLines(earningsFile(projectRoot)).some(record => record?.runId === runId)
+}
+
+async function recoverEarningsCheckpoint(projectRoot) {
+    const checkpoint = await readEarningsCheckpoint(projectRoot)
+    if (!checkpoint) {
+        return { recovered: false, reason: 'missing' }
+    }
+
+    if (checkpoint.accountStats.length === 0) {
+        await clearEarningsCheckpoint(projectRoot, checkpoint.runId)
+        return { recovered: false, reason: 'empty', checkpoint }
+    }
+
+    if (hasEarningsRun(projectRoot, checkpoint.runId)) {
+        await clearEarningsCheckpoint(projectRoot, checkpoint.runId)
+        return { recovered: false, reason: 'already-recorded', checkpoint }
+    }
+
+    const record = await appendEarningsRun(projectRoot, {
+        runId: checkpoint.runId,
+        runStartedAt: checkpoint.runStartedAt,
+        runFinishedAt: checkpoint.updatedAt,
+        accountStats: checkpoint.accountStats,
+        hadWorkerFailure: true,
+        riskControlStopped: checkpoint.riskControlStopped
+    })
+    await clearEarningsCheckpoint(projectRoot, checkpoint.runId)
+
+    return { recovered: true, reason: 'recovered', checkpoint, record }
 }
 
 function readJsonLines(filePath) {
@@ -457,8 +563,13 @@ function readEarningsReport(
 
 module.exports = {
     earningsFile,
+    earningsCheckpointFile,
     buildRunRecord,
     appendEarningsRun,
+    writeEarningsCheckpoint,
+    readEarningsCheckpoint,
+    clearEarningsCheckpoint,
+    recoverEarningsCheckpoint,
     readEarningsReport,
     listHistoricalAccounts
 }

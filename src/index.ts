@@ -31,10 +31,16 @@ import type { AppDashboardData } from './interface/AppDashBoardData'
 import { PanelFlyoutData } from './interface/PanelFlyoutData'
 
 const PROJECT_ROOT = path.resolve(__dirname, '..')
-const { appendEarningsRun } = require('../earnings-report.cjs') as {
+const {
+    appendEarningsRun,
+    writeEarningsCheckpoint,
+    clearEarningsCheckpoint,
+    recoverEarningsCheckpoint
+} = require('../earnings-report.cjs') as {
     appendEarningsRun: (
         projectRoot: string,
         input: {
+            runId?: string
             runStartedAt: number
             runFinishedAt: number
             accountStats: AccountStats[]
@@ -42,6 +48,30 @@ const { appendEarningsRun } = require('../earnings-report.cjs') as {
             riskControlStopped?: boolean
         }
     ) => Promise<unknown>
+    writeEarningsCheckpoint: (
+        projectRoot: string,
+        input: {
+            runId: string
+            runStartedAt: number
+            updatedAt: number
+            accountStats: AccountStats[]
+            hadWorkerFailure?: boolean
+            riskControlStopped?: boolean
+            reason?: string
+        }
+    ) => Promise<unknown>
+    clearEarningsCheckpoint: (projectRoot: string, runId?: string) => Promise<unknown>
+    recoverEarningsCheckpoint: (
+        projectRoot: string
+    ) => Promise<{
+        recovered: boolean
+        reason: string
+        checkpoint?: {
+            runId: string
+            accountStats: AccountStats[]
+            runStartedAt: string
+        }
+    }>
 }
 interface ExecutionContext {
     isMobile: boolean
@@ -66,6 +96,14 @@ interface AccountStats {
 
 interface IpcRiskControlStop {
     detection: RiskControlDetection
+}
+
+interface IpcWorkerMessage {
+    __ipcLog?: IpcLog
+    __ipcAlert?: IpcAlert
+    __stats?: AccountStats[]
+    __accountStat?: AccountStats
+    __riskControlStop?: IpcRiskControlStop
 }
 
 const executionContext = new AsyncLocalStorage<ExecutionContext>()
@@ -98,6 +136,7 @@ export class MicrosoftRewardsBot {
     public utils: Utils // 工具类实例
     public activities: Activities = new Activities(this) // 活动管理器
     public browser: { func: BrowserFunc; utils: BrowserUtils } // 浏览器功能和工具
+    private projectRoot = PROJECT_ROOT
 
     public mainMobilePage!: Page // 主要的移动端页面
     public mainDesktopPage!: Page // 主要的桌面端页面
@@ -115,6 +154,12 @@ export class MicrosoftRewardsBot {
 
     private pointsCanCollect = 0 // 可收集的积分
     private riskControlStopping = false
+    private currentRunId = ''
+    private currentRunStartTime = 0
+    private completedAccountStats: AccountStats[] = []
+    private earningsReportWritten = false
+    private earningsReportFlushPromise: Promise<void> | null = null
+    private earningsCheckpointPromise: Promise<void> | null = null
 
     private activeWorkers: number // 活跃的工作进程数
     private exitedWorkers: number[] // 已退出的工作进程PID数组
@@ -202,14 +247,29 @@ export class MicrosoftRewardsBot {
         runStartTime: number,
         hadWorkerFailure: boolean
     ): Promise<void> {
+        if (!cluster.isPrimary) {
+            return
+        }
+
+        if (this.earningsReportWritten) {
+            this.logger.debug('main', 'EARNINGS-REPORT', '收益报表已写入，跳过重复写入')
+            return
+        }
+
         try {
-            await appendEarningsRun(PROJECT_ROOT, {
+            await this.waitForEarningsCheckpoint()
+            await appendEarningsRun(this.getProjectRoot(), {
+                runId: this.currentRunId || undefined,
                 runStartedAt: runStartTime,
                 runFinishedAt: Date.now(),
                 accountStats,
                 hadWorkerFailure,
                 riskControlStopped: this.riskControlStopping
             })
+            this.earningsReportWritten = true
+            if (this.currentRunId) {
+                await clearEarningsCheckpoint(this.getProjectRoot(), this.currentRunId)
+            }
             this.logger.info('main', 'EARNINGS-REPORT', '收益报表已写入 reports/earnings.jsonl')
         } catch (error) {
             this.logger.warn(
@@ -217,6 +277,161 @@ export class MicrosoftRewardsBot {
                 'EARNINGS-REPORT',
                 `收益报表写入失败: ${error instanceof Error ? error.message : String(error)}`
             )
+        }
+    }
+
+    private beginEarningsRun(runStartTime: number): void {
+        this.currentRunId = `${new Date(runStartTime).toISOString()}-${process.pid}`
+        this.currentRunStartTime = runStartTime
+        this.completedAccountStats = []
+        this.earningsReportWritten = false
+        this.earningsReportFlushPromise = null
+        this.earningsCheckpointPromise = null
+    }
+
+    private getProjectRoot(): string {
+        return this.projectRoot || PROJECT_ROOT
+    }
+
+    private queueEarningsCheckpoint(reason: string): void {
+        if (!cluster.isPrimary || !this.currentRunStartTime || this.earningsReportWritten) {
+            return
+        }
+
+        const previous = this.earningsCheckpointPromise ?? Promise.resolve()
+        this.earningsCheckpointPromise = previous
+            .catch(() => undefined)
+            .then(async () => {
+                if (this.earningsReportWritten) {
+                    return
+                }
+
+                const stats = [...(this.completedAccountStats ?? [])]
+                if (stats.length === 0) {
+                    return
+                }
+
+                await writeEarningsCheckpoint(this.getProjectRoot(), {
+                    runId: this.currentRunId,
+                    runStartedAt: this.currentRunStartTime,
+                    updatedAt: Date.now(),
+                    accountStats: stats,
+                    hadWorkerFailure: true,
+                    riskControlStopped: this.riskControlStopping,
+                    reason
+                })
+            })
+            .catch(error => {
+                this.logger.warn(
+                    'main',
+                    'EARNINGS-REPORT',
+                    `收益 checkpoint 写入失败: ${error instanceof Error ? error.message : String(error)}`
+                )
+            })
+    }
+
+    private async waitForEarningsCheckpoint(): Promise<void> {
+        if (this.earningsCheckpointPromise) {
+            await this.earningsCheckpointPromise
+        }
+    }
+
+    private async recoverInterruptedEarningsReport(): Promise<void> {
+        if (!cluster.isPrimary) {
+            return
+        }
+
+        try {
+            const result = await recoverEarningsCheckpoint(this.getProjectRoot())
+            if (result.recovered) {
+                this.logger.warn(
+                    'main',
+                    'EARNINGS-REPORT',
+                    `已恢复上次中断的收益报表 | runId=${result.checkpoint?.runId ?? 'unknown'} | accounts=${
+                        result.checkpoint?.accountStats?.length ?? 0
+                    }`
+                )
+            } else if (result.reason !== 'missing') {
+                this.logger.debug('main', 'EARNINGS-REPORT', `跳过收益 checkpoint 恢复 | reason=${result.reason}`)
+            }
+        } catch (error) {
+            this.logger.warn(
+                'main',
+                'EARNINGS-REPORT',
+                `收益 checkpoint 恢复失败: ${error instanceof Error ? error.message : String(error)}`
+            )
+        }
+    }
+
+    private upsertAccountStat(target: AccountStats[], stat: AccountStats): void {
+        const index = target.findIndex(item => item.email.toLowerCase() === stat.email.toLowerCase())
+        if (index === -1) {
+            target.push(stat)
+        } else {
+            target[index] = stat
+        }
+    }
+
+    private rememberCompletedAccountStats(stats: AccountStats[]): void {
+        if (!this.completedAccountStats) {
+            this.completedAccountStats = []
+        }
+
+        for (const stat of stats) {
+            this.upsertAccountStat(this.completedAccountStats, stat)
+        }
+
+        this.queueEarningsCheckpoint('account-complete')
+    }
+
+    private rememberCompletedAccountStat(stat: AccountStats): void {
+        this.rememberCompletedAccountStats([stat])
+
+        if (!cluster.isPrimary && typeof process.send === 'function') {
+            try {
+                process.send({ __accountStat: stat } as IpcWorkerMessage)
+            } catch {}
+        }
+    }
+
+    async flushPartialEarningsReport(reason: string, hadWorkerFailure = true): Promise<void> {
+        if (this.earningsReportWritten) {
+            return
+        }
+
+        if (!cluster.isPrimary) {
+            if (this.completedAccountStats?.length && typeof process.send === 'function') {
+                try {
+                    process.send({ __stats: this.completedAccountStats } as IpcWorkerMessage)
+                } catch {}
+            }
+            return
+        }
+
+        if (this.earningsReportFlushPromise) {
+            return this.earningsReportFlushPromise
+        }
+
+        this.earningsReportFlushPromise = (async () => {
+            if (!this.currentRunStartTime) {
+                return
+            }
+
+            const stats = [...(this.completedAccountStats ?? [])]
+            await this.waitForEarningsCheckpoint()
+            this.logger.warn(
+                'main',
+                'EARNINGS-REPORT',
+                `检测到运行中断，写入已完成账号的收益报表 | reason=${reason} | accounts=${stats.length}`
+            )
+            await this.appendEarningsReport(stats, this.currentRunStartTime, hadWorkerFailure)
+            this.earningsReportWritten = true
+        })()
+
+        try {
+            await this.earningsReportFlushPromise
+        } finally {
+            this.earningsReportFlushPromise = null
         }
     }
 
@@ -253,6 +468,8 @@ export class MicrosoftRewardsBot {
     async run(): Promise<void> {
         const totalAccounts = this.accounts.length
         const runStartTime = Date.now()
+        await this.recoverInterruptedEarningsReport()
+        this.beginEarningsRun(runStartTime)
 
         this.logger.info(
             'main',
@@ -304,20 +521,23 @@ export class MicrosoftRewardsBot {
             const worker = cluster.fork()
             worker.send?.({ chunk, runStartTime })
 
-            worker.on('message', (msg: {
-                __ipcLog?: IpcLog
-                __ipcAlert?: IpcAlert
-                __stats?: AccountStats[]
-                __riskControlStop?: IpcRiskControlStop
-            }) => {
+            worker.on('message', (msg: IpcWorkerMessage) => {
                 if (msg.__riskControlStop?.detection) {
                     const workers = Object.values(cluster.workers ?? {}).filter(Boolean) as Worker[]
                     this.beginRiskControlShutdown(msg.__riskControlStop.detection, workers)
                     return
                 }
 
+                if (msg.__accountStat) {
+                    this.upsertAccountStat(allAccountStats, msg.__accountStat)
+                    this.rememberCompletedAccountStats([msg.__accountStat])
+                }
+
                 if (msg.__stats) {
-                    allAccountStats.push(...msg.__stats)
+                    for (const stat of msg.__stats) {
+                        this.upsertAccountStat(allAccountStats, stat)
+                    }
+                    this.rememberCompletedAccountStats(msg.__stats)
                 }
 
                 // 紧急告警：绕过 webhookLogFilter，强制发所有启用的 webhook
@@ -451,6 +671,9 @@ export class MicrosoftRewardsBot {
 
     private async runTasks(accounts: Account[], runStartTime: number): Promise<AccountStats[]> {
         const accountStats: AccountStats[] = []
+        if (!this.currentRunStartTime) {
+            this.beginEarningsRun(runStartTime)
+        }
 
         // 打乱账号顺序：避免每次都按 accounts.json 固定顺序跑, 让多账号的首次搜索
         // 时间在微软风控里不再有稳定"账号 A 永远先于账号 B"的特征
@@ -493,14 +716,16 @@ export class MicrosoftRewardsBot {
                     const accountInitialPoints = result.initialPoints ?? 0
                     const accountFinalPoints = accountInitialPoints + collectedPoints
 
-                    accountStats.push({
+                    const stat: AccountStats = {
                         email: accountEmail,
                         initialPoints: accountInitialPoints,
                         finalPoints: accountFinalPoints,
                         collectedPoints: collectedPoints,
                         duration: parseFloat(durationSeconds),
                         success: true
-                    })
+                    }
+                    accountStats.push(stat)
+                    this.rememberCompletedAccountStat(stat)
 
                     this.logger.info(
                         'main',
@@ -509,7 +734,7 @@ export class MicrosoftRewardsBot {
                         'green'
                     )
                 } else {
-                    accountStats.push({
+                    const stat: AccountStats = {
                         email: accountEmail,
                         initialPoints: 0,
                         finalPoints: 0,
@@ -517,10 +742,25 @@ export class MicrosoftRewardsBot {
                         duration: parseFloat(durationSeconds),
                         success: false,
                         error: '流程失败'
-                    })
+                    }
+                    accountStats.push(stat)
+                    this.rememberCompletedAccountStat(stat)
                 }
             } catch (error) {
                 if (error instanceof RiskControlDetectedError) {
+                    const durationSeconds = ((Date.now() - accountStartTime) / 1000).toFixed(1)
+                    const stat: AccountStats = {
+                        email: accountEmail,
+                        initialPoints: 0,
+                        finalPoints: 0,
+                        collectedPoints: 0,
+                        duration: parseFloat(durationSeconds),
+                        success: false,
+                        error: error.message,
+                        riskControlStopped: true
+                    }
+                    accountStats.push(stat)
+                    this.rememberCompletedAccountStat(stat)
                     throw error
                 }
 
@@ -531,7 +771,7 @@ export class MicrosoftRewardsBot {
                     `${accountEmail}: ${error instanceof Error ? error.message : String(error)}`
                 )
 
-                accountStats.push({
+                const stat: AccountStats = {
                     email: accountEmail,
                     initialPoints: 0,
                     finalPoints: 0,
@@ -539,7 +779,9 @@ export class MicrosoftRewardsBot {
                     duration: parseFloat(durationSeconds),
                     success: false,
                     error: error instanceof Error ? error.message : String(error)
-                })
+                }
+                accountStats.push(stat)
+                this.rememberCompletedAccountStat(stat)
             }
         }
 
@@ -720,21 +962,31 @@ async function main(): Promise<void> {
     })
     process.on('SIGINT', async () => {
         rewardsBot.logger.warn('main', 'PROCESS', '收到 SIGINT 信号，正在刷新并退出...')
+        await rewardsBot.flushPartialEarningsReport('SIGINT')
         await flushAllWebhooks()
         process.exit(130)
     })
     process.on('SIGTERM', async () => {
         rewardsBot.logger.warn('main', 'PROCESS', '收到 SIGTERM 信号，正在刷新并退出...')
+        await rewardsBot.flushPartialEarningsReport('SIGTERM')
         await flushAllWebhooks()
         process.exit(143)
     })
+    process.on('SIGHUP', async () => {
+        rewardsBot.logger.warn('main', 'PROCESS', '收到 SIGHUP 信号，正在刷新并退出...')
+        await rewardsBot.flushPartialEarningsReport('SIGHUP')
+        await flushAllWebhooks()
+        process.exit(129)
+    })
     process.on('uncaughtException', async error => {
         rewardsBot.logger.error('main', 'UNCAUGHT-EXCEPTION', error)
+        await rewardsBot.flushPartialEarningsReport('uncaughtException')
         await flushAllWebhooks()
         process.exit(1)
     })
     process.on('unhandledRejection', async reason => {
         rewardsBot.logger.error('main', 'UNHANDLED-REJECTION', reason as Error)
+        await rewardsBot.flushPartialEarningsReport('unhandledRejection')
         await flushAllWebhooks()
         process.exit(1)
     })
@@ -744,6 +996,7 @@ async function main(): Promise<void> {
         await rewardsBot.run()
     } catch (error) {
         rewardsBot.logger.error('main', 'MAIN-ERROR', error as Error)
+        await rewardsBot.flushPartialEarningsReport('main error')
         await flushAllWebhooks()
         process.exit(1)
     }

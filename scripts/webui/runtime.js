@@ -1,6 +1,5 @@
 import fs from 'fs'
-
-const DEFAULT_LOCK_FILE = '/tmp/run_daily.lock'
+import { resolveDockerLockFile } from '../docker/runtime-maintenance.js'
 
 function envFlag(value, defaultValue = false) {
     if (value === undefined || value === null || value === '') return defaultValue
@@ -36,7 +35,7 @@ export function buildCapabilities(runtime, { platform = process.platform } = {})
 export function readExternalRunStatus(
     runtime = detectRuntime(),
     {
-        lockFile = process.env.MRS_DOCKER_LOCKFILE || DEFAULT_LOCK_FILE,
+        lockFile = resolveDockerLockFile(process.env),
         existsSync = fs.existsSync,
         readFileSync = fs.readFileSync,
         signalCheck = pid => {
