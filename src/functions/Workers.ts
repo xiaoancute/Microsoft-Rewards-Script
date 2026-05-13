@@ -200,6 +200,66 @@ export class Workers {
         await executeModernPanelOpportunities(this.bot, opportunities, page)
     }
 
+    private hasText(value: unknown): value is string {
+        return typeof value === 'string' && value.trim().length > 0
+    }
+
+    private canUseModernUrlRewardApi(promotion: BasePromotion): boolean {
+        if (this.bot.rewardsVersion !== 'modern') {
+            return false
+        }
+
+        const offerId = promotion.offerId?.trim()
+        const flyoutResult = this.bot.panelData?.flyoutResult
+        if (!offerId || !flyoutResult) {
+            return false
+        }
+
+        const todayKey = this.bot.utils.getFormattedDate()
+        const candidates = [
+            ...(flyoutResult.morePromotions ?? []),
+            ...(flyoutResult.dailySetPromotions?.[todayKey] ?? [])
+        ]
+
+        return candidates.some(
+            candidate =>
+                candidate?.offerId === offerId &&
+                this.hasText(candidate.hash) &&
+                this.hasText(candidate.activityType)
+        )
+    }
+
+    private async doUrlRewardActivity(promotion: BasePromotion, page: Page): Promise<void> {
+        const offerId = promotion.offerId ?? 'unknown'
+
+        if (this.bot.rewardsVersion === 'legacy') {
+            if (this.hasText(this.bot.requestToken)) {
+                await this.bot.activities.doUrlReward(promotion)
+                return
+            }
+
+            this.bot.logger.warn(
+                this.bot.isMobile,
+                'URL-REWARD',
+                `请求令牌不可用，改用浏览器打开兜底 | offerId=${offerId}`
+            )
+            await this.bot.activities.doOpenUrlReward(promotion, page)
+            return
+        }
+
+        if (this.canUseModernUrlRewardApi(promotion)) {
+            await this.bot.activities.doDaily(promotion)
+            return
+        }
+
+        this.bot.logger.warn(
+            this.bot.isMobile,
+            'URL-REWARD',
+            `现代面板活动上下文不完整，改用浏览器打开兜底 | offerId=${offerId}`
+        )
+        await this.bot.activities.doOpenUrlReward(promotion, page)
+    }
+
     public async doPunchCards(data: DashboardData, page: Page) {
         const punchCards =
             data.punchCards?.filter(
@@ -295,9 +355,7 @@ export class Workers {
                                 `发现活动类型 "UrlReward" | 标题="${activity.title}" | offerId=${offerId}`
                             )
 
-                            // await this.bot.activities.doUrlReward(basePromotion)
-                            await this.bot.activities.doDaily(basePromotion)
-
+                            await this.doUrlRewardActivity(basePromotion, page)
                         }
                         break
                     }

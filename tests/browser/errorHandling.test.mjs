@@ -248,6 +248,39 @@ test('flushPartialEarningsReport writes completed stats once during interrupted 
     assert.equal(calls[0].stats[0].email, 'done@example.com')
 })
 
+test('flushPartialEarningsReport includes active account progress during interrupted shutdown', async () => {
+    const mod = await loadBotModule()
+    const { MicrosoftRewardsBot } = mod
+    const bot = Object.create(MicrosoftRewardsBot.prototype)
+
+    const calls = []
+    bot.logger = { info() {}, warn() {}, error() {}, debug() {}, alert() {} }
+    bot.currentRunStartTime = 1760000000000
+    bot.currentAccountEmail = 'active@example.com'
+    bot.currentAccountStartTime = 1760000005000
+    bot.currentAccountProgressReady = true
+    bot.completedAccountStats = []
+    bot.userData = {
+        initialPoints: 100,
+        currentPoints: 135
+    }
+    bot.riskControlStopping = false
+    bot.appendEarningsReport = async (stats, runStartTime, hadWorkerFailure) => {
+        calls.push({ stats, runStartTime, hadWorkerFailure })
+    }
+
+    await bot.flushPartialEarningsReport('SIGTERM')
+
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0].stats.length, 1)
+    assert.equal(calls[0].stats[0].email, 'active@example.com')
+    assert.equal(calls[0].stats[0].initialPoints, 100)
+    assert.equal(calls[0].stats[0].finalPoints, 135)
+    assert.equal(calls[0].stats[0].collectedPoints, 35)
+    assert.equal(calls[0].stats[0].success, false)
+    assert.match(calls[0].stats[0].error, /SIGTERM/)
+})
+
 test('runTasks keeps completed account stats available for later interrupt flushing', async () => {
     const mod = await loadBotModule()
     const { MicrosoftRewardsBot } = mod
@@ -292,4 +325,134 @@ test('runTasks keeps completed account stats available for later interrupt flush
     const checkpoint = JSON.parse(await fs.readFile(path.join(projectRoot, 'reports', 'earnings.pending.json'), 'utf8'))
     assert.equal(checkpoint.accountStats[0].email, 'partial@example.com')
     assert.equal(checkpoint.accountStats[0].collectedPoints, 15)
+})
+
+test('earnings checkpoint persists active account progress before account completes', async () => {
+    const mod = await loadBotModule()
+    const { MicrosoftRewardsBot } = mod
+    const bot = Object.create(MicrosoftRewardsBot.prototype)
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mrs-active-progress-'))
+
+    bot.projectRoot = projectRoot
+    bot.logger = { info() {}, warn() {}, error() {}, debug() {}, alert() {} }
+    bot.userData = {
+        initialPoints: 200,
+        currentPoints: 260
+    }
+    bot.beginEarningsRun(1760000000000)
+    bot.currentAccountEmail = 'active@example.com'
+    bot.currentAccountStartTime = 1760000005000
+    bot.currentAccountProgressReady = true
+
+    bot.queueEarningsCheckpoint('progress')
+    await bot.earningsCheckpointPromise
+
+    const checkpoint = JSON.parse(await fs.readFile(path.join(projectRoot, 'reports', 'earnings.pending.json'), 'utf8'))
+    assert.equal(checkpoint.accountStats.length, 1)
+    assert.equal(checkpoint.accountStats[0].email, 'active@example.com')
+    assert.equal(checkpoint.accountStats[0].initialPoints, 200)
+    assert.equal(checkpoint.accountStats[0].finalPoints, 260)
+    assert.equal(checkpoint.accountStats[0].collectedPoints, 60)
+    assert.equal(checkpoint.accountStats[0].success, false)
+})
+
+test('earnings checkpoint ignores account progress until the initial balance is loaded', async () => {
+    const mod = await loadBotModule()
+    const { MicrosoftRewardsBot } = mod
+    const bot = Object.create(MicrosoftRewardsBot.prototype)
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mrs-progress-gate-'))
+
+    bot.projectRoot = projectRoot
+    bot.logger = { info() {}, warn() {}, error() {}, debug() {}, alert() {} }
+    bot.userData = {
+        initialPoints: 999,
+        currentPoints: 1010
+    }
+    bot.beginEarningsRun(1760000000000)
+    bot.completedAccountStats = [
+        {
+            email: 'done@example.com',
+            initialPoints: 100,
+            finalPoints: 110,
+            collectedPoints: 10,
+            duration: 5,
+            success: true
+        }
+    ]
+    bot.currentAccountEmail = 'active@example.com'
+    bot.currentAccountStartTime = 1760000005000
+
+    bot.queueEarningsCheckpoint('account-start')
+    await bot.earningsCheckpointPromise
+
+    const checkpoint = JSON.parse(await fs.readFile(path.join(projectRoot, 'reports', 'earnings.pending.json'), 'utf8'))
+    assert.equal(checkpoint.accountStats.length, 1)
+    assert.equal(checkpoint.accountStats[0].email, 'done@example.com')
+})
+
+test('mergeAccountStats keeps worker progress when final stats are missing', async () => {
+    const mod = await loadBotModule()
+    const { MicrosoftRewardsBot } = mod
+    const bot = Object.create(MicrosoftRewardsBot.prototype)
+
+    const merged = bot.mergeAccountStats(
+        [
+            {
+                email: 'done@example.com',
+                initialPoints: 10,
+                finalPoints: 15,
+                collectedPoints: 5,
+                duration: 1,
+                success: true
+            }
+        ],
+        [
+            {
+                email: 'active@example.com',
+                initialPoints: 100,
+                finalPoints: 130,
+                collectedPoints: 30,
+                duration: 20,
+                success: false,
+                error: 'worker disconnected'
+            }
+        ]
+    )
+
+    assert.equal(merged.length, 2)
+    assert.equal(merged.find(item => item.email === 'active@example.com').collectedPoints, 30)
+})
+
+test('mergeAccountStats lets final worker stats replace older progress stats', async () => {
+    const mod = await loadBotModule()
+    const { MicrosoftRewardsBot } = mod
+    const bot = Object.create(MicrosoftRewardsBot.prototype)
+
+    const merged = bot.mergeAccountStats(
+        [
+            {
+                email: 'same@example.com',
+                initialPoints: 100,
+                finalPoints: 150,
+                collectedPoints: 50,
+                duration: 40,
+                success: true
+            }
+        ],
+        [
+            {
+                email: 'same@example.com',
+                initialPoints: 100,
+                finalPoints: 120,
+                collectedPoints: 20,
+                duration: 20,
+                success: false,
+                error: 'progress'
+            }
+        ]
+    )
+
+    assert.equal(merged.length, 1)
+    assert.equal(merged[0].collectedPoints, 50)
+    assert.equal(merged[0].success, true)
 })

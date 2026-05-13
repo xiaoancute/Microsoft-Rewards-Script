@@ -53,8 +53,14 @@ function createBot(overrides = {}) {
             async doDoubleSearchPoints(promotion) {
                 dispatchCalls.push(['double-search', promotion.offerId])
             },
+            async doUrlReward(promotion) {
+                dispatchCalls.push(['legacy-urlreward', promotion.offerId])
+            },
             async doDaily(promotion) {
                 dispatchCalls.push(['urlreward', promotion.offerId])
+            },
+            async doOpenUrlReward(promotion, page) {
+                dispatchCalls.push(['browser-urlreward', promotion.offerId, page])
             },
             async doQuiz(promotion, page) {
                 dispatchCalls.push(['quiz', promotion.offerId, page])
@@ -122,9 +128,60 @@ test('Workers.doSpecialPromotions dispatches supported non-double-search promoti
 
     assert.deepEqual(dispatchCalls, [
         ['double-search', 'special-double-1'],
-        ['urlreward', 'special-url-1'],
+        ['browser-urlreward', 'special-url-1', page],
         ['quiz', 'special-quiz-1', page],
         ['search-on-bing', 'special-search-1', page],
         ['findclippy', 'special-clippy-1']
     ])
+})
+
+test('Workers.doSpecialPromotions uses legacy UrlReward API when request token is available', async () => {
+    const Workers = await loadWorkers()
+    const { bot, dispatchCalls } = createBot({
+        rewardsVersion: 'legacy',
+        requestToken: 'request-token'
+    })
+    const workers = new Workers(bot)
+    const page = { tag: 'special-page' }
+
+    await workers.doSpecialPromotions(
+        {
+            promotionalItems: [
+                makePromotion({
+                    offerId: 'legacy-url-1',
+                    name: 'generic-urlreward',
+                    promotionType: 'urlreward'
+                })
+            ]
+        },
+        page
+    )
+
+    assert.deepEqual(dispatchCalls, [['legacy-urlreward', 'legacy-url-1']])
+})
+
+test('Workers.doSpecialPromotions falls back to browser UrlReward when legacy token is missing', async () => {
+    const Workers = await loadWorkers()
+    const { bot, dispatchCalls } = createBot({
+        rewardsVersion: 'legacy',
+        requestToken: ''
+    })
+    const workers = new Workers(bot)
+    const page = { tag: 'special-page' }
+
+    await workers.doSpecialPromotions(
+        {
+            promotionalItems: [
+                makePromotion({
+                    offerId: 'legacy-browser-url-1',
+                    name: 'generic-urlreward',
+                    promotionType: 'urlreward',
+                    destinationUrl: 'https://rewards.bing.com/browser-fallback'
+                })
+            ]
+        },
+        page
+    )
+
+    assert.deepEqual(dispatchCalls, [['browser-urlreward', 'legacy-browser-url-1', page]])
 })

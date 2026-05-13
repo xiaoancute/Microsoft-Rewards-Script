@@ -150,7 +150,7 @@ class Browser {
         // 使用指纹生成器创建指纹数据
         const fingerPrintData = new FingerprintGenerator().getFingerprint({
             devices: isMobile ? ['mobile'] : ['desktop'], // 根据是否为移动端选择设备类型
-            operatingSystems: isMobile ? ['android', 'ios'] : ['windows', 'linux'], // 根据是否为移动端选择操作系统
+            operatingSystems: isMobile ? ['android'] : ['windows'], // Edge Android UA 需要与平台信号一致
             browsers: [{ name: 'edge' }], // 使用Edge浏览器
             locales: ['zh-CN']
         })

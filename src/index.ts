@@ -103,6 +103,7 @@ interface IpcWorkerMessage {
     __ipcAlert?: IpcAlert
     __stats?: AccountStats[]
     __accountStat?: AccountStats
+    __accountProgress?: AccountStats
     __riskControlStop?: IpcRiskControlStop
 }
 
@@ -156,10 +157,13 @@ export class MicrosoftRewardsBot {
     private riskControlStopping = false
     private currentRunId = ''
     private currentRunStartTime = 0
+    private currentAccountStartTime = 0
+    private currentAccountProgressReady = false
     private completedAccountStats: AccountStats[] = []
     private earningsReportWritten = false
     private earningsReportFlushPromise: Promise<void> | null = null
     private earningsCheckpointPromise: Promise<void> | null = null
+    private accountProgressTimer: NodeJS.Timeout | null = null
 
     private activeWorkers: number // 活跃的工作进程数
     private exitedWorkers: number[] // 已退出的工作进程PID数组
@@ -293,8 +297,90 @@ export class MicrosoftRewardsBot {
         return this.projectRoot || PROJECT_ROOT
     }
 
+    private normalizePointValue(value: unknown, fallback = 0): number {
+        const points = Number(value)
+        return Number.isFinite(points) ? points : fallback
+    }
+
+    private beginAccountProgress(accountEmail: string, accountStartTime: number): void {
+        this.stopAccountProgressTimer()
+        this.currentAccountEmail = accountEmail
+        this.currentAccountStartTime = accountStartTime
+        this.currentAccountProgressReady = false
+
+        this.accountProgressTimer = setInterval(() => {
+            this.queueEarningsCheckpoint('account-progress')
+        }, 30_000)
+        this.accountProgressTimer.unref?.()
+        this.queueEarningsCheckpoint('account-start')
+    }
+
+    private finishAccountProgress(accountEmail: string): void {
+        if (this.currentAccountEmail && this.currentAccountEmail !== accountEmail) {
+            return
+        }
+
+        this.stopAccountProgressTimer()
+        this.currentAccountStartTime = 0
+        this.currentAccountProgressReady = false
+        this.currentAccountEmail = ''
+    }
+
+    private stopAccountProgressTimer(): void {
+        if (this.accountProgressTimer) {
+            clearInterval(this.accountProgressTimer)
+            this.accountProgressTimer = null
+        }
+    }
+
+    private buildCurrentAccountProgressStat(reason: string): AccountStats | null {
+        if (!this.currentAccountEmail || !this.currentAccountStartTime || !this.currentAccountProgressReady) {
+            return null
+        }
+
+        const initialPoints = this.normalizePointValue(this.userData?.initialPoints)
+        const finalPoints = Math.max(initialPoints, this.normalizePointValue(this.userData?.currentPoints, initialPoints))
+        const duration = Math.max(0, (Date.now() - this.currentAccountStartTime) / 1000)
+
+        return {
+            email: this.currentAccountEmail,
+            initialPoints,
+            finalPoints,
+            collectedPoints: Math.max(0, finalPoints - initialPoints),
+            duration: parseFloat(duration.toFixed(1)),
+            success: false,
+            error: `运行中断: ${reason}`,
+            riskControlStopped: this.riskControlStopping
+        }
+    }
+
+    private buildCheckpointAccountStats(reason: string): AccountStats[] {
+        const stats = [...(this.completedAccountStats ?? [])]
+        const progressStat = this.buildCurrentAccountProgressStat(reason)
+
+        if (progressStat && !stats.some(stat => stat.email.toLowerCase() === progressStat.email.toLowerCase())) {
+            stats.push(progressStat)
+        }
+
+        return stats
+    }
+
+    public checkpointEarningsProgress(reason: string): void {
+        this.queueEarningsCheckpoint(reason)
+    }
+
     private queueEarningsCheckpoint(reason: string): void {
-        if (!cluster.isPrimary || !this.currentRunStartTime || this.earningsReportWritten) {
+        if (!this.currentRunStartTime || this.earningsReportWritten) {
+            return
+        }
+
+        if (!cluster.isPrimary) {
+            const progressStat = this.buildCurrentAccountProgressStat(reason)
+            if (progressStat && typeof process.send === 'function') {
+                try {
+                    process.send({ __accountProgress: progressStat } as IpcWorkerMessage)
+                } catch {}
+            }
             return
         }
 
@@ -306,7 +392,7 @@ export class MicrosoftRewardsBot {
                     return
                 }
 
-                const stats = [...(this.completedAccountStats ?? [])]
+                const stats = this.buildCheckpointAccountStats(reason)
                 if (stats.length === 0) {
                     return
                 }
@@ -372,6 +458,16 @@ export class MicrosoftRewardsBot {
         }
     }
 
+    private mergeAccountStats(primary: AccountStats[], fallback: AccountStats[]): AccountStats[] {
+        const merged = [...primary]
+        for (const stat of fallback) {
+            if (!merged.some(item => item.email.toLowerCase() === stat.email.toLowerCase())) {
+                merged.push(stat)
+            }
+        }
+        return merged
+    }
+
     private rememberCompletedAccountStats(stats: AccountStats[]): void {
         if (!this.completedAccountStats) {
             this.completedAccountStats = []
@@ -394,15 +490,44 @@ export class MicrosoftRewardsBot {
         }
     }
 
+    private buildInterruptedAccountStat(
+        accountEmail: string,
+        accountStartTime: number,
+        error: string,
+        riskControlStopped = false
+    ): AccountStats {
+        const progressStat = this.buildCurrentAccountProgressStat(error)
+        if (progressStat && progressStat.email.toLowerCase() === accountEmail.toLowerCase()) {
+            return {
+                ...progressStat,
+                error,
+                riskControlStopped
+            }
+        }
+
+        const durationSeconds = ((Date.now() - accountStartTime) / 1000).toFixed(1)
+        return {
+            email: accountEmail,
+            initialPoints: 0,
+            finalPoints: 0,
+            collectedPoints: 0,
+            duration: parseFloat(durationSeconds),
+            success: false,
+            error,
+            riskControlStopped
+        }
+    }
+
     async flushPartialEarningsReport(reason: string, hadWorkerFailure = true): Promise<void> {
         if (this.earningsReportWritten) {
             return
         }
 
         if (!cluster.isPrimary) {
-            if (this.completedAccountStats?.length && typeof process.send === 'function') {
+            const stats = this.buildCheckpointAccountStats(reason)
+            if (stats.length && typeof process.send === 'function') {
                 try {
-                    process.send({ __stats: this.completedAccountStats } as IpcWorkerMessage)
+                    process.send({ __stats: stats } as IpcWorkerMessage)
                 } catch {}
             }
             return
@@ -417,7 +542,7 @@ export class MicrosoftRewardsBot {
                 return
             }
 
-            const stats = [...(this.completedAccountStats ?? [])]
+            const stats = this.buildCheckpointAccountStats(reason)
             await this.waitForEarningsCheckpoint()
             this.logger.warn(
                 'main',
@@ -533,6 +658,10 @@ export class MicrosoftRewardsBot {
                     this.rememberCompletedAccountStats([msg.__accountStat])
                 }
 
+                if (msg.__accountProgress) {
+                    this.rememberCompletedAccountStats([msg.__accountProgress])
+                }
+
                 if (msg.__stats) {
                     for (const stat of msg.__stats) {
                         this.upsertAccountStat(allAccountStats, stat)
@@ -599,20 +728,21 @@ export class MicrosoftRewardsBot {
             )
 
             if (this.activeWorkers <= 0) {
-                const totalCollectedPoints = allAccountStats.reduce((sum, s) => sum + s.collectedPoints, 0)
-                const totalInitialPoints = allAccountStats.reduce((sum, s) => sum + s.initialPoints, 0)
-                const totalFinalPoints = allAccountStats.reduce((sum, s) => sum + s.finalPoints, 0)
+                const reportAccountStats = this.mergeAccountStats(allAccountStats, this.completedAccountStats)
+                const totalCollectedPoints = reportAccountStats.reduce((sum, s) => sum + s.collectedPoints, 0)
+                const totalInitialPoints = reportAccountStats.reduce((sum, s) => sum + s.initialPoints, 0)
+                const totalFinalPoints = reportAccountStats.reduce((sum, s) => sum + s.finalPoints, 0)
                 const totalDurationMinutes = ((Date.now() - runStartTime) / 1000 / 60).toFixed(1)
 
                 this.logger.info(
                     'main',
                     'RUN-END',
-                    `已完成所有账户 | 已处理账户: ${allAccountStats.length} | 总收集积分: +${totalCollectedPoints} | 原始总计: ${totalInitialPoints} → 新总计: ${totalFinalPoints} | 总运行时间: ${totalDurationMinutes}分钟`,
+                    `已完成所有账户 | 已处理账户: ${reportAccountStats.length} | 总收集积分: +${totalCollectedPoints} | 原始总计: ${totalInitialPoints} → 新总计: ${totalFinalPoints} | 总运行时间: ${totalDurationMinutes}分钟`,
                     'green'
                 )
 
-                await this.appendEarningsReport(allAccountStats, runStartTime, hadWorkerFailure)
-                await this.sendPushPlusSummary(allAccountStats, runStartTime, hadWorkerFailure)
+                await this.appendEarningsReport(reportAccountStats, runStartTime, hadWorkerFailure)
+                await this.sendPushPlusSummary(reportAccountStats, runStartTime, hadWorkerFailure)
                 await flushAllWebhooks()
 
                 process.exit(hadWorkerFailure ? 1 : 0)
@@ -682,7 +812,7 @@ export class MicrosoftRewardsBot {
         for (const account of shuffled) {
             const accountStartTime = Date.now()
             const accountEmail = account.email
-            this.currentAccountEmail = accountEmail
+            this.beginAccountProgress(accountEmail, accountStartTime)
             this.userData.userName = this.utils.getEmailUsername(accountEmail)
 
             try {
@@ -726,6 +856,7 @@ export class MicrosoftRewardsBot {
                     }
                     accountStats.push(stat)
                     this.rememberCompletedAccountStat(stat)
+                    this.finishAccountProgress(accountEmail)
 
                     this.logger.info(
                         'main',
@@ -734,33 +865,17 @@ export class MicrosoftRewardsBot {
                         'green'
                     )
                 } else {
-                    const stat: AccountStats = {
-                        email: accountEmail,
-                        initialPoints: 0,
-                        finalPoints: 0,
-                        collectedPoints: 0,
-                        duration: parseFloat(durationSeconds),
-                        success: false,
-                        error: '流程失败'
-                    }
+                    const stat = this.buildInterruptedAccountStat(accountEmail, accountStartTime, '流程失败')
                     accountStats.push(stat)
                     this.rememberCompletedAccountStat(stat)
+                    this.finishAccountProgress(accountEmail)
                 }
             } catch (error) {
                 if (error instanceof RiskControlDetectedError) {
-                    const durationSeconds = ((Date.now() - accountStartTime) / 1000).toFixed(1)
-                    const stat: AccountStats = {
-                        email: accountEmail,
-                        initialPoints: 0,
-                        finalPoints: 0,
-                        collectedPoints: 0,
-                        duration: parseFloat(durationSeconds),
-                        success: false,
-                        error: error.message,
-                        riskControlStopped: true
-                    }
+                    const stat = this.buildInterruptedAccountStat(accountEmail, accountStartTime, error.message, true)
                     accountStats.push(stat)
                     this.rememberCompletedAccountStat(stat)
+                    this.finishAccountProgress(accountEmail)
                     throw error
                 }
 
@@ -771,17 +886,11 @@ export class MicrosoftRewardsBot {
                     `${accountEmail}: ${error instanceof Error ? error.message : String(error)}`
                 )
 
-                const stat: AccountStats = {
-                    email: accountEmail,
-                    initialPoints: 0,
-                    finalPoints: 0,
-                    collectedPoints: 0,
-                    duration: parseFloat(durationSeconds),
-                    success: false,
-                    error: error instanceof Error ? error.message : String(error)
-                }
+                const errorMessage = error instanceof Error ? error.message : String(error)
+                const stat = this.buildInterruptedAccountStat(accountEmail, accountStartTime, errorMessage)
                 accountStats.push(stat)
                 this.rememberCompletedAccountStat(stat)
+                this.finishAccountProgress(accountEmail)
             }
         }
 
@@ -881,7 +990,9 @@ export class MicrosoftRewardsBot {
 
                 this.userData.initialPoints = data.userStatus.availablePoints
                 this.userData.currentPoints = data.userStatus.availablePoints
+                this.currentAccountProgressReady = true
                 const initialPoints = this.userData.initialPoints ?? 0
+                this.checkpointEarningsProgress('initial-points-loaded')
 
                 const browserEarnable = await this.browser.func.getBrowserEarnablePoints()
                 const appEarnable = await this.browser.func.getAppEarnablePoints()
@@ -896,15 +1007,37 @@ export class MicrosoftRewardsBot {
                     } | 应用: ${appEarnable?.totalEarnablePoints ?? 0} | ${accountEmail} | 区域设置: ${this.userData.geoLocale}`
                 )
 
-                if (this.config.workers.doAppPromotions) await this.workers.doAppPromotions(appData)
-                if (this.config.workers.doDailySet) await this.workers.doDailySet(data, this.mainMobilePage)
-                if (this.config.workers.doSpecialPromotions) await this.workers.doSpecialPromotions(data, this.mainMobilePage)
-                if (this.config.workers.doMorePromotions) await this.workers.doMorePromotions(data, this.mainMobilePage)
-                if (this.config.workers.doDailyCheckIn) await this.activities.doDailyCheckIn()
-                if (this.config.workers.doReadToEarn) await this.activities.doReadToEarn()
-                if (this.config.workers.doPunchCards) await this.workers.doPunchCards(data, this.mainMobilePage)
+                if (this.config.workers.doAppPromotions) {
+                    await this.workers.doAppPromotions(appData)
+                    this.checkpointEarningsProgress('app-promotions')
+                }
+                if (this.config.workers.doDailySet) {
+                    await this.workers.doDailySet(data, this.mainMobilePage)
+                    this.checkpointEarningsProgress('daily-set')
+                }
+                if (this.config.workers.doSpecialPromotions) {
+                    await this.workers.doSpecialPromotions(data, this.mainMobilePage)
+                    this.checkpointEarningsProgress('special-promotions')
+                }
+                if (this.config.workers.doMorePromotions) {
+                    await this.workers.doMorePromotions(data, this.mainMobilePage)
+                    this.checkpointEarningsProgress('more-promotions')
+                }
+                if (this.config.workers.doDailyCheckIn) {
+                    await this.activities.doDailyCheckIn()
+                    this.checkpointEarningsProgress('daily-check-in')
+                }
+                if (this.config.workers.doReadToEarn) {
+                    await this.activities.doReadToEarn()
+                    this.checkpointEarningsProgress('read-to-earn')
+                }
+                if (this.config.workers.doPunchCards) {
+                    await this.workers.doPunchCards(data, this.mainMobilePage)
+                    this.checkpointEarningsProgress('punch-cards')
+                }
                 if (this.rewardsVersion === 'modern' && this.panelData) {
                     await this.workers.doModernPanelPromotions(this.panelData, data, this.mainMobilePage)
+                    this.checkpointEarningsProgress('modern-panel')
                 }
 
                 const searchPoints = await this.browser.func.getSearchPoints()
@@ -919,6 +1052,7 @@ export class MicrosoftRewardsBot {
                     account,
                     accountEmail
                 )
+                this.checkpointEarningsProgress('searches')
 
                 mobileContextClosed = true
 
