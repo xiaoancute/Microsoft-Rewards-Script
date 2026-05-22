@@ -24,14 +24,14 @@ export class CodeLogin {
 
             if (visibleInput) {
                 await this.bot.browser.utils.humanType(page, code)
-                this.bot.logger.info(this.bot.isMobile, 'LOGIN-CODE', 'Filled code input')
+                this.bot.logger.info(this.bot.isMobile, 'LOGIN-CODE', `Filled code input: "${code}" `)
                 return true
             }
 
             const secondairyInput = await page.$(this.secondairyInputSelector)
             if (secondairyInput) {
                 await this.bot.browser.utils.humanType(page, code)
-                this.bot.logger.info(this.bot.isMobile, 'LOGIN-CODE', 'Filled code input')
+                this.bot.logger.info(this.bot.isMobile, 'LOGIN-CODE', `Filled code input: "${code}" `)
                 return true
             }
 

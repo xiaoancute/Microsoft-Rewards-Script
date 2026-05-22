@@ -13,7 +13,8 @@
         "doDesktopSearch": true,
         "doMobileSearch": true,
         "doDailyCheckIn": true,
-        "doReadToEarn": true
+        "doReadToEarn": true,
+        "doClaimBonusPoints": true
     },
     "searchOnBingLocalQueries": false,
     "globalTimeout": "50sec",
@@ -36,7 +37,10 @@
         "scrollRandomResults": true,
         "clickRandomResults": 0.6,
         "parallelSearching": false,
-        "queryEngines": ["china", "local"],
+        "queryEngines": [
+            "china",
+            "local"
+        ],
         "searchResultVisitTime": {
             "min": "8sec",
             "max": "45sec"
@@ -54,8 +58,13 @@
     "consoleLogFilter": {
         "enabled": false,
         "mode": "whitelist",
-        "levels": ["error", "warn"],
-        "keywords": ["starting account"],
+        "levels": [
+            "error",
+            "warn"
+        ],
+        "keywords": [
+            "starting account"
+        ],
         "regexPatterns": []
     },
     "proxy": {
@@ -72,7 +81,10 @@
             "topic": "",
             "token": "",
             "title": "Microsoft-Rewards-Script",
-            "tags": ["bot", "notify"],
+            "tags": [
+                "bot",
+                "notify"
+            ],
             "priority": 3
         },
         "pushplus": {
@@ -84,9 +96,16 @@
         "webhookLogFilter": {
             "enabled": false,
             "mode": "whitelist",
-            "levels": ["error"],
-            "keywords": ["starting account", "select number", "collected"],
+            "levels": [
+                "error"
+            ],
+            "keywords": [
+                "starting account",
+                "select number",
+                "collected"
+            ],
             "regexPatterns": []
         }
-    }
+    },
+    "ensureStreakProtection": true
 }

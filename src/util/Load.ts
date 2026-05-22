@@ -79,8 +79,8 @@ export function loadConfig(): Config {
         }
 
         const projectRoot = getProjectRoot()
-        const { data: configData } = readFirstExistingJson<Config>(runtimePaths.getConfigCandidatePaths(projectRoot))
-        validateConfig(configData)
+        const { data: unverifiedConfig } = readFirstExistingJson<Config>(runtimePaths.getConfigCandidatePaths(projectRoot))
+        const configData = validateConfig(unverifiedConfig)
 
         configCache = configData
 

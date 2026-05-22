@@ -98,7 +98,7 @@ export class Quiz extends Workers {
                     try {
                         const jsonData = {
                             UserId: null,
-                            TimeZoneOffset: -60,
+                            timeZone: this.bot.userData.timezoneOffset,
                             OfferId: offerId,
                             ActivityCount: 1,
                             QuestionIndex: '-1'

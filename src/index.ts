@@ -148,6 +148,7 @@ interface UserData {
     userName: string
     geoLocale: string
     langCode: string
+    timezoneOffset: string
     initialPoints: number
     currentPoints: number
     gainedPoints: number
@@ -208,6 +209,7 @@ export class MicrosoftRewardsBot {
             userName: '', // 用户名
             geoLocale: 'CN', // 地理区域
             langCode: 'zh', // 语言代码
+            timezoneOffset: '60', // 时区偏移
             initialPoints: 0, // 初始积分
             currentPoints: 0, // 当前积分
             gainedPoints: 0 // 已获得积分
@@ -1006,6 +1008,7 @@ export class MicrosoftRewardsBot {
             const accountEmail = account.email
             this.beginAccountProgress(accountEmail, accountStartTime)
             this.userData.userName = this.utils.getEmailUsername(accountEmail)
+            this.userData.timezoneOffset = String(-new Date().getTimezoneOffset())
 
             try {
                 this.logger.info(
@@ -1228,6 +1231,15 @@ export class MicrosoftRewardsBot {
                     }
                 }
 
+                if (this.config.ensureStreakProtection) {
+                    await this.browser.func.ensureStreakProtection()
+                }
+                if (this.config.workers.doClaimBonusPoints) {
+                    await this.trackTask('claim-bonus-points', '领取积分横幅', () =>
+                        this.workers.doClaimBonusPoints(data)
+                    )
+                    this.checkpointEarningsProgress('claim-bonus-points')
+                }
                 if (this.config.workers.doAppPromotions) {
                     await this.trackTask('app-promotions', 'App 活动', () => this.workers.doAppPromotions(appData))
                     this.checkpointEarningsProgress('app-promotions')

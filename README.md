@@ -173,6 +173,10 @@ cp src/accounts.example.json config/accounts.json
 cp src/config.example.json   config/config.json
 ```
 
+新版配置项（可选）：
+- `"ensureStreakProtection": true` — 强制开启连续天数保护（防止连击天数清零）
+- `"workers.doClaimBonusPoints": true` — 自动领取仪表盘积分横幅奖励
+
 #### 3. 填账号
 
 编辑：
