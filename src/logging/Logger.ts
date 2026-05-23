@@ -55,6 +55,24 @@ function formatMessage(message: string | Error): string {
     return message instanceof Error ? `${message.message}\n${message.stack || ''}` : message
 }
 
+export function redactSensitiveText(value: string): string {
+    let text = value
+
+    text = text.replace(
+        /([?&](?:code|access_token|refresh_token|id_token|client_secret|password|passwd|pwd|__RequestVerificationToken)=)([^&#\s]+)/gi,
+        '$1[REDACTED]'
+    )
+    text = text.replace(
+        /\b((?:access_token|refresh_token|id_token|client_secret|password|passwd|pwd|__RequestVerificationToken)\s*[:=]\s*)(["']?)[^\s"',;&]+/gi,
+        '$1$2[REDACTED]'
+    )
+    text = text.replace(/\b(authorization\s*:\s*bearer\s+)[^\s]+/gi, '$1[REDACTED]')
+    text = text.replace(/\b(cookie|set-cookie)\s*:\s*[^\r\n]+/gi, '$1: [REDACTED]')
+    text = text.replace(/(["']?cookie["']?\s*[:=]\s*["'])[^"']+(["'])/gi, '$1[REDACTED]$2')
+
+    return text
+}
+
 /**
  * 确保日志目录存在
  */
@@ -118,7 +136,7 @@ export class Logger {
      */
     alert(isMobile: Platform, title: string, message: string | Error) {
         const now = new Date().toLocaleString()
-        const formatted = formatMessage(message)
+        const formatted = redactSensitiveText(formatMessage(message))
         const userName = this.bot.userData.userName ? this.bot.userData.userName : '主进程'
         const cleanMsg = `[${now}] [${userName}] [🚨 ALERT] ${platformText(isMobile)} [${title}] ${formatted}`
 
@@ -152,7 +170,7 @@ export class Logger {
         color?: ColorKey
     ): void {
         const now = new Date().toLocaleString()
-        const formatted = formatMessage(message)
+        const formatted = redactSensitiveText(formatMessage(message))
 
         const userName = this.bot.userData.userName ? this.bot.userData.userName : '主进程'
 

@@ -22,6 +22,7 @@ accounts.dev.json
 .DS_Store
 .playwright-chromium-installed
 QWEN.md
+CLAUDE.md
 bun.lock
 logs/
 reports/
