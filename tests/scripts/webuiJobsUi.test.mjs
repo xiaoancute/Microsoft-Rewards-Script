@@ -7,15 +7,15 @@ import { chooseDefaultJobId, formatJobOptionLabel } from '../../scripts/webui/pu
 test('run log job filter labels describe log sources clearly', async () => {
     assert.equal(
         formatJobOptionLabel({ id: 12, label: '立即运行', running: true }),
-        '#12 立即运行 · 运行中'
+        '立即运行 · 运行中'
     )
     assert.equal(
         formatJobOptionLabel({ id: 11, label: '重新构建', running: false, exitCode: 0 }),
-        '#11 重新构建 · 已完成'
+        '重新构建 · 已完成'
     )
     assert.equal(
         formatJobOptionLabel({ id: 10, label: '立即运行', running: false, exitCode: 1 }),
-        '#10 立即运行 · 异常退出'
+        '立即运行 · 异常退出'
     )
 })
 

@@ -4,7 +4,7 @@ export function formatJobOptionLabel(job) {
         : Number(job?.exitCode) === 0
             ? '已完成'
             : '异常退出'
-    return `#${job?.id} ${job?.label || '后台任务'} · ${status}`
+    return `${job?.label || '后台任务'} · ${status}`
 }
 
 export function chooseDefaultJobId(jobs, currentValue = '') {
