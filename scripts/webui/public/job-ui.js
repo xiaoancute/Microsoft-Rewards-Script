@@ -1,4 +1,6 @@
-export function formatJobOptionLabel(job) {
+export function formatCurrentLogSourceLabel(job) {
+    if (!job) return '当前任务日志'
+
     const status = job?.running
         ? '运行中'
         : Number(job?.exitCode) === 0
@@ -7,12 +9,8 @@ export function formatJobOptionLabel(job) {
     return `${job?.label || '后台任务'} · ${status}`
 }
 
-export function chooseDefaultJobId(jobs, currentValue = '') {
+export function chooseLogJobId(jobs) {
     const list = Array.isArray(jobs) ? jobs : []
-    if (currentValue && list.some(job => String(job.id) === String(currentValue))) {
-        return String(currentValue)
-    }
-
     const running = list.find(job => job.running)
     if (running) return String(running.id)
 

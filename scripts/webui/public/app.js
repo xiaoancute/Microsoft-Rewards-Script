@@ -1,7 +1,7 @@
 // Frontend app — vanilla JS ESM, no bundler
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { chooseDefaultJobId, formatJobOptionLabel } from './job-ui.js'
+import { chooseLogJobId, formatCurrentLogSourceLabel } from './job-ui.js'
 
 const TOKEN_KEY = 'webui_token'
 const THEME_KEY = 'webui_theme'
@@ -141,7 +141,7 @@ function switchTab(name) {
     if (name === 'reports') loadReports()
     if (name === 'sessions') loadSessions()
     if (name === 'config') loadConfig()
-    if (name === 'logs') loadJobs({ autoSelect: true })
+    if (name === 'logs') loadJobs({ autoSubscribe: true })
     if (name === 'env') loadEnv()
     if (name === 'schedule') loadSchedule()
     if (name === 'loghistory') loadLogHistory()
@@ -635,7 +635,7 @@ async function openBrowser(email) {
         state.activeJobId = jobId
         switchTab('logs')
         await loadJobs()
-        document.getElementById('job-filter').value = String(jobId)
+        renderCurrentLogSource(jobId)
         subscribeLogs(jobId)
     } catch (err) {
         toast(`打开浏览器失败: ${err.message}`, 'err')
@@ -897,9 +897,9 @@ async function loadJobs(options = {}) {
         ])
         state.jobs = jobs
         if (status) state.status = status
-        const selectedJobId = renderJobFilter({ autoSelect: Boolean(options.autoSelect) })
+        const selectedJobId = renderCurrentLogSource()
         updateRunButtons()
-        if (options.autoSelect && selectedJobId) {
+        if (options.autoSubscribe && selectedJobId) {
             subscribeLogs(Number(selectedJobId))
         }
     } catch (err) {
@@ -907,21 +907,13 @@ async function loadJobs(options = {}) {
     }
 }
 
-function renderJobFilter(options = {}) {
-    const sel = document.getElementById('job-filter')
-    const cur = sel.value
-    sel.innerHTML = '<option value="">全部实时日志</option>'
-    state.jobs.forEach(j => {
-        const o = document.createElement('option')
-        o.value = String(j.id)
-        o.textContent = formatJobOptionLabel(j)
-        sel.appendChild(o)
-    })
-    const nextValue = options.autoSelect ? chooseDefaultJobId(state.jobs, cur) : cur
-    if (nextValue && state.jobs.some(j => String(j.id) === String(nextValue))) {
-        sel.value = String(nextValue)
+function renderCurrentLogSource(jobId = chooseLogJobId(state.jobs)) {
+    const selectedJob = state.jobs.find(job => String(job.id) === String(jobId))
+    const label = document.getElementById('job-source-label')
+    if (label) {
+        label.textContent = formatCurrentLogSourceLabel(selectedJob)
     }
-    return sel.value
+    return selectedJob ? String(selectedJob.id) : ''
 }
 
 function updateRunButtons() {
@@ -962,7 +954,7 @@ document.getElementById('btn-run-start').addEventListener('click', async () => {
         toast(`已启动任务 #${jobId}`, 'ok')
         state.activeJobId = jobId
         await loadJobs()
-        document.getElementById('job-filter').value = String(jobId)
+        renderCurrentLogSource(jobId)
         subscribeLogs(jobId)
     } catch (err) {
         toast(`启动失败: ${err.message}`, 'err')
@@ -981,7 +973,7 @@ async function startBuild() {
         toast(`已启动构建 #${jobId}`, 'ok')
         state.activeJobId = jobId
         await loadJobs()
-        document.getElementById('job-filter').value = String(jobId)
+        renderCurrentLogSource(jobId)
         subscribeLogs(jobId)
     } catch (err) {
         toast(`构建失败: ${err.message}`, 'err')
@@ -999,11 +991,6 @@ document.getElementById('btn-run-stop').addEventListener('click', async event =>
     } catch (err) {
         toast(`停止失败: ${err.message}`, 'err')
     }
-})
-
-document.getElementById('job-filter').addEventListener('change', event => {
-    const id = Number(event.target.value) || null
-    subscribeLogs(id)
 })
 
 function subscribeLogs(jobId) {
@@ -1558,7 +1545,7 @@ function renderEnv(env) {
                 toast(`已启动: ${label}`, 'ok')
                 switchTab('logs')
                 await loadJobs()
-                document.getElementById('job-filter').value = String(jobId)
+                renderCurrentLogSource(jobId)
                 subscribeLogs(jobId)
             } catch (err) {
                 toast(`启动失败: ${err.message}`, 'err')
