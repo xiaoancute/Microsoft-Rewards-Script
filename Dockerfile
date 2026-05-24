@@ -89,6 +89,7 @@ COPY --from=builder /usr/src/microsoft-rewards-script/scripts/docker ./scripts/d
 COPY --from=builder /usr/src/microsoft-rewards-script/scripts/utils.js ./scripts/utils.js
 COPY --from=builder /usr/src/microsoft-rewards-script/runtime-paths.cjs ./runtime-paths.cjs
 COPY --from=builder /usr/src/microsoft-rewards-script/earnings-report.cjs ./earnings-report.cjs
+COPY --from=builder /usr/src/microsoft-rewards-script/account-run-policy.cjs ./account-run-policy.cjs
 
 # Copy config example into the image so entrypoint can use it as a fallback
 # when the user hasn't mounted their own config.json

@@ -108,3 +108,56 @@ test('buildPreflightReport reports missing runtime files and active Docker lock'
     assert.equal(report.checks.find(item => item.id === 'external-run')?.status, 'fail')
     assert.equal(report.checks.find(item => item.id === 'proxy-spread')?.status, 'warn')
 })
+
+test('buildPreflightReport blocks when account policy leaves no runnable accounts', async () => {
+    const projectRoot = await makeProjectRoot()
+    await fs.mkdir(path.join(projectRoot, 'dist'), { recursive: true })
+    await fs.writeFile(path.join(projectRoot, 'dist', 'index.js'), '// built')
+    await fs.mkdir(path.join(projectRoot, 'logs'), { recursive: true })
+    await fs.mkdir(path.join(projectRoot, 'reports'), { recursive: true })
+    await writeJson(path.join(projectRoot, 'config', 'config.json'), config())
+    await writeJson(path.join(projectRoot, 'config', 'accounts.json'), [
+        account('disabled@example.com', { enabled: false })
+    ])
+    await writeJson(path.join(projectRoot, 'sessions', 'disabled@example.com', 'session_mobile.json'), [{ name: 'MUID' }])
+
+    const report = buildPreflightReport(projectRoot, {
+        runtime: { isDocker: false, mode: 'local' },
+        capabilities: { canOpenBrowserSession: true },
+        externalRun: { active: false }
+    })
+
+    const policyCheck = report.checks.find(item => item.id === 'account-policy')
+    assert.equal(report.summary.status, 'blocked')
+    assert.equal(report.summary.canRun, false)
+    assert.equal(policyCheck?.status, 'fail')
+    assert.match(policyCheck?.detail || '', /0\/1 个账号可运行/)
+})
+
+test('buildPreflightReport warns when only some accounts are skipped by policy', async () => {
+    const projectRoot = await makeProjectRoot()
+    await fs.mkdir(path.join(projectRoot, 'dist'), { recursive: true })
+    await fs.writeFile(path.join(projectRoot, 'dist', 'index.js'), '// built')
+    await fs.mkdir(path.join(projectRoot, 'logs'), { recursive: true })
+    await fs.mkdir(path.join(projectRoot, 'reports'), { recursive: true })
+    await writeJson(path.join(projectRoot, 'config', 'config.json'), config())
+    await writeJson(path.join(projectRoot, 'config', 'accounts.json'), [
+        account('enabled@example.com'),
+        account('disabled@example.com', { enabled: false })
+    ])
+    await writeJson(path.join(projectRoot, 'sessions', 'enabled@example.com', 'session_mobile.json'), [{ name: 'MUID' }])
+    await writeJson(path.join(projectRoot, 'sessions', 'disabled@example.com', 'session_mobile.json'), [{ name: 'MUID' }])
+
+    const report = buildPreflightReport(projectRoot, {
+        runtime: { isDocker: false, mode: 'local' },
+        capabilities: { canOpenBrowserSession: true },
+        externalRun: { active: false }
+    })
+
+    const policyCheck = report.checks.find(item => item.id === 'account-policy')
+    assert.equal(report.summary.status, 'warning')
+    assert.equal(report.summary.canRun, true)
+    assert.equal(policyCheck?.status, 'warn')
+    assert.match(policyCheck?.detail || '', /1\/2 个账号可运行/)
+    assert.match(policyCheck?.hint || '', /disabled@example\.com/)
+})

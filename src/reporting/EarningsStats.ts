@@ -7,6 +7,18 @@ export interface AccountStats {
     success: boolean
     error?: string
     riskControlStopped?: boolean
+    taskStats?: TaskStats[]
+}
+
+export interface TaskStats {
+    key: string
+    label: string
+    status: 'success' | 'failed' | 'skipped'
+    initialPoints: number
+    finalPoints: number
+    collectedPoints: number
+    duration: number
+    error?: string
 }
 
 export function normalizePointValue(value: unknown, fallback = 0): number {

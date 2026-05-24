@@ -100,12 +100,24 @@ export const ConfigSchema = z.object({
         .object({
             enabled: z.boolean()
         })
+        .optional(),
+    accountHealth: z
+        .object({
+            autoSkip: z
+                .object({
+                    enabled: z.boolean().optional(),
+                    riskCooldownHours: z.number().positive().optional(),
+                    maxConsecutiveFailures: z.number().int().positive().optional()
+                })
+                .optional()
+        })
         .optional()
 })
 
 // Account
 export const AccountSchema = z.object({
     email: z.string(),
+    enabled: z.boolean().optional(),
     password: z.string(),
     totpSecret: z.string().optional(),
     recoveryEmail: z.string(),

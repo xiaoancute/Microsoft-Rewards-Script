@@ -15,10 +15,19 @@ export interface Config {
     /** 可选：安静时段。落在这个区间里启动时会等到区间外才开始（跨日也支持）。真人不会凌晨 3 点搜索。 */
     quietHours?: ConfigQuietHours
     riskControlStop?: ConfigRiskControlStop
+    accountHealth?: ConfigAccountHealth
 }
 
 export interface ConfigRiskControlStop {
     enabled: boolean
+}
+
+export interface ConfigAccountHealth {
+    autoSkip?: {
+        enabled?: boolean
+        riskCooldownHours?: number
+        maxConsecutiveFailures?: number
+    }
 }
 
 export interface ConfigQuietHours {

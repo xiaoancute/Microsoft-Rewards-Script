@@ -1,6 +1,10 @@
 import fs from 'fs'
 import path from 'path'
 import runtimePaths from '../../runtime-paths.cjs'
+import { createRequire } from 'module'
+
+const require = createRequire(import.meta.url)
+const { selectRunnableAccounts } = require('../../account-run-policy.cjs')
 
 const {
     getAccountsCandidatePaths,
@@ -168,6 +172,7 @@ export function buildPreflightReport(
     const accountsResult = readFirstJson(getAccountsCandidatePaths(projectRoot, false))
     const canonicalAccounts = getCanonicalAccountsPath(projectRoot)
     let accounts = []
+    let runnableAccounts = []
     if (!accountsResult) {
         checks.push(check('accounts', '账号文件', 'fail', '未找到 accounts.json', '需要 config/accounts.json。'))
     } else if (accountsResult.error) {
@@ -202,11 +207,39 @@ export function buildPreflightReport(
         )
     }
 
+    if (accounts.length > 0 && config) {
+        const selection = selectRunnableAccounts({
+            projectRoot,
+            accounts,
+            config,
+            now: Date.now()
+        })
+        runnableAccounts = selection.runnable
+        const skipped = selection.skipped
+        const status = runnableAccounts.length === 0 ? 'fail' : skipped.length > 0 ? 'warn' : 'ok'
+        checks.push(
+            check(
+                'account-policy',
+                '账号运行策略',
+                status,
+                `${runnableAccounts.length}/${accounts.length} 个账号可运行`,
+                skipped.length
+                    ? `已跳过: ${skipped
+                          .slice(0, 5)
+                          .map(item => `${item.email}(${item.reason})`)
+                          .join(', ')}${skipped.length > 5 ? '...' : ''}`
+                    : ''
+            )
+        )
+    } else {
+        runnableAccounts = accounts
+    }
+
     const sessionPath = config?.sessionPath || 'sessions'
-    if (accounts.length > 0) {
+    if (runnableAccounts.length > 0) {
         const missingSessions = []
         let availableSessions = 0
-        for (const account of accounts) {
+        for (const account of runnableAccounts) {
             if (!isLikelyEmail(account.email)) continue
             const session = sessionSummary(projectRoot, sessionPath, account.email)
             if (session.ok) availableSessions++
@@ -214,7 +247,7 @@ export function buildPreflightReport(
         }
 
         if (missingSessions.length === 0) {
-            checks.push(check('sessions', '登录 Session', 'ok', `${availableSessions}/${accounts.length} 个账号已有 cookies`))
+            checks.push(check('sessions', '登录 Session', 'ok', `${availableSessions}/${runnableAccounts.length} 个可运行账号已有 cookies`))
         } else {
             const dockerBlocked = Boolean(runtime?.isDocker) && !capabilities.canOpenBrowserSession
             checks.push(

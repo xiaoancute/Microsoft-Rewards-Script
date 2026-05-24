@@ -4,6 +4,7 @@ const path = require('path')
 const REPORT_DIR = 'reports'
 const EARNINGS_FILE = 'earnings.jsonl'
 const EARNINGS_CHECKPOINT_FILE = 'earnings.pending.json'
+const FAILURE_SNAPSHOTS_FILE = 'failure-snapshots.jsonl'
 const DAY_MS = 24 * 60 * 60 * 1000
 const FAILURE_BUCKET_ORDER = ['risk_control', 'login', 'session', 'network', 'flow', 'unknown']
 const FAILURE_BUCKET_LABELS = {
@@ -13,6 +14,17 @@ const FAILURE_BUCKET_LABELS = {
     network: '网络异常',
     flow: '流程异常',
     unknown: '未归类'
+}
+const TASK_LABELS = {
+    'app-promotions': 'App 活动',
+    'daily-set': '每日任务',
+    'special-promotions': '特殊活动',
+    'more-promotions': '更多活动',
+    'daily-check-in': '每日签到',
+    'read-to-earn': '阅读赚取',
+    'punch-cards': 'Punch Cards',
+    'modern-panel': '现代面板',
+    searches: '搜索'
 }
 
 function reportsDir(projectRoot) {
@@ -27,6 +39,10 @@ function earningsCheckpointFile(projectRoot) {
     return path.join(reportsDir(projectRoot), EARNINGS_CHECKPOINT_FILE)
 }
 
+function failureSnapshotsFile(projectRoot) {
+    return path.join(reportsDir(projectRoot), FAILURE_SNAPSHOTS_FILE)
+}
+
 function toIso(value) {
     return new Date(value || Date.now()).toISOString()
 }
@@ -36,6 +52,9 @@ function dateKey(value) {
 }
 
 function normalizeAccountStat(stat) {
+    const taskStats = Array.isArray(stat.taskStats)
+        ? stat.taskStats.map(normalizeTaskStat).filter(Boolean)
+        : []
     return {
         email: String(stat.email || ''),
         initialPoints: Number(stat.initialPoints) || 0,
@@ -44,8 +63,81 @@ function normalizeAccountStat(stat) {
         duration: Number(stat.duration) || 0,
         success: Boolean(stat.success),
         error: stat.error ? String(stat.error) : undefined,
-        riskControlStopped: Boolean(stat.riskControlStopped)
+        riskControlStopped: Boolean(stat.riskControlStopped),
+        taskStats
     }
+}
+
+function normalizeTaskStat(task) {
+    if (!task?.key) return null
+    const key = String(task.key)
+    const status = ['success', 'failed', 'skipped'].includes(task.status) ? task.status : 'success'
+    return {
+        key,
+        label: String(task.label || TASK_LABELS[key] || key),
+        status,
+        initialPoints: Number(task.initialPoints) || 0,
+        finalPoints: Number(task.finalPoints) || 0,
+        collectedPoints: Number(task.collectedPoints) || 0,
+        duration: Number(task.duration) || 0,
+        error: task.error ? String(task.error) : undefined
+    }
+}
+
+function redactSensitiveText(value) {
+    let text = String(value || '')
+    text = text.replace(
+        /([?&](?:code|access_token|refresh_token|id_token|client_secret|password|passwd|pwd|__RequestVerificationToken)=)([^&#\s]+)/gi,
+        '$1[REDACTED]'
+    )
+    text = text.replace(
+        /\b((?:access_token|refresh_token|id_token|client_secret|password|passwd|pwd|__RequestVerificationToken)\s*[:=]\s*)(["']?)[^\s"',;&]+/gi,
+        '$1$2[REDACTED]'
+    )
+    text = text.replace(/\b(authorization\s*:\s*bearer\s+)[^\s]+/gi, '$1[REDACTED]')
+    text = text.replace(/\b(cookie|set-cookie)\s*:\s*[^\r\n]+/gi, '$1: [REDACTED]')
+    text = text.replace(/(["']?cookie["']?\s*[:=]\s*["'])[^"']+(["'])/gi, '$1[REDACTED]$2')
+    return text
+}
+
+function normalizeFailureSnapshot(input) {
+    const capturedAt = toIso(input?.capturedAt || Date.now())
+    const error = input?.error ? redactSensitiveText(input.error) : undefined
+    const riskControlStopped = Boolean(input?.riskControlStopped)
+    const stat = {
+        error,
+        riskControlStopped
+    }
+
+    return {
+        schemaVersion: 1,
+        runId: input?.runId ? String(input.runId) : undefined,
+        account: String(input?.account || input?.email || 'unknown'),
+        stage: input?.stage ? String(input.stage) : 'unknown',
+        error,
+        failureBucket: input?.failureBucket ? String(input.failureBucket) : classifyFailure(stat),
+        riskControlStopped,
+        url: input?.url ? redactSensitiveText(input.url) : undefined,
+        pageTitle: input?.pageTitle ? redactSensitiveText(input.pageTitle) : undefined,
+        capturedAt
+    }
+}
+
+async function appendFailureSnapshot(projectRoot, input) {
+    const snapshot = normalizeFailureSnapshot(input)
+    await fs.promises.mkdir(reportsDir(projectRoot), { recursive: true })
+    await fs.promises.appendFile(failureSnapshotsFile(projectRoot), `${JSON.stringify(snapshot)}\n`, 'utf8')
+    return snapshot
+}
+
+function readFailureSnapshots(projectRoot, { account = 'all', limit = 50 } = {}) {
+    const normalizedAccount = account && account !== 'all' ? String(account).toLowerCase() : null
+    const max = Math.max(1, Math.min(Number(limit) || 50, 500))
+    return readJsonLines(failureSnapshotsFile(projectRoot))
+        .map(item => normalizeFailureSnapshot(item))
+        .filter(item => !normalizedAccount || item.account.toLowerCase() === normalizedAccount)
+        .sort((a, b) => new Date(b.capturedAt).getTime() - new Date(a.capturedAt).getTime())
+        .slice(0, max)
 }
 
 function buildRunRecord({
@@ -294,6 +386,20 @@ function createFailureBucketSummary() {
     }))
 }
 
+function createTaskSummaryItem(key, label) {
+    return {
+        key,
+        label: label || TASK_LABELS[key] || key,
+        runs: 0,
+        accountCount: 0,
+        collectedPoints: 0,
+        successCount: 0,
+        failedCount: 0,
+        skippedCount: 0,
+        totalDuration: 0
+    }
+}
+
 function emptySummary(window) {
     return {
         days: window.days,
@@ -302,6 +408,7 @@ function emptySummary(window) {
         accounts: [],
         recentRuns: [],
         failureBuckets: createFailureBucketSummary(),
+        taskSummary: [],
         window: {
             range: window.range,
             startDate: window.startDate,
@@ -408,6 +515,7 @@ function readEarningsReport(
     const daily = new Map(window.dayKeys.map(day => [day, createDailyRow(day)]))
     const totals = createTotals()
     const accounts = new Map()
+    const taskSummary = new Map()
     const failureBuckets = new Map(
         FAILURE_BUCKET_ORDER.map(key => [key, { key, label: FAILURE_BUCKET_LABELS[key], count: 0, emails: new Set() }])
     )
@@ -486,6 +594,18 @@ function readEarningsReport(
                 bucket.emails.add(email)
             }
 
+            for (const task of stat.taskStats || []) {
+                const item = taskSummary.get(task.key) || createTaskSummaryItem(task.key, task.label)
+                item.runs += 1
+                item.accountCount += 1
+                item.collectedPoints += task.collectedPoints
+                item.successCount += task.status === 'success' ? 1 : 0
+                item.failedCount += task.status === 'failed' ? 1 : 0
+                item.skippedCount += task.status === 'skipped' ? 1 : 0
+                item.totalDuration += task.duration
+                taskSummary.set(task.key, item)
+            }
+
             accounts.set(email, accountItem)
         }
     }
@@ -552,6 +672,9 @@ function readEarningsReport(
             count: failureBuckets.get(key).count,
             accountCount: failureBuckets.get(key).emails.size
         })),
+        taskSummary: Array.from(taskSummary.values()).sort(
+            (a, b) => b.collectedPoints - a.collectedPoints || a.label.localeCompare(b.label)
+        ),
         window: {
             range: window.range,
             startDate: window.startDate,
@@ -564,8 +687,11 @@ function readEarningsReport(
 module.exports = {
     earningsFile,
     earningsCheckpointFile,
+    failureSnapshotsFile,
     buildRunRecord,
     appendEarningsRun,
+    appendFailureSnapshot,
+    readFailureSnapshots,
     writeEarningsCheckpoint,
     readEarningsCheckpoint,
     clearEarningsCheckpoint,

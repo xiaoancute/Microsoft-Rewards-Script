@@ -11,6 +11,11 @@ async function loadSearchManager() {
     return mod.SearchManager
 }
 
+async function loadSearch() {
+    const mod = await import('../../dist/functions/activities/browser/Search.js')
+    return mod.Search
+}
+
 test('SearchOnBing.searchBing navigates the provided page instead of mainMobilePage', async () => {
     const SearchOnBing = await loadSearchOnBing()
     const pageNavigations = []
@@ -79,6 +84,163 @@ test('SearchOnBing.searchBing navigates the provided page instead of mainMobileP
 
     assert.match(pageNavigations[0] ?? '', /^https:\/\/bing\.com\/search\?q=/)
     assert.deepEqual(mainMobileNavigations, [])
+})
+
+test('Search.bingSearch stops immediately when the results page hits risk control', async () => {
+    const Search = await loadSearch()
+    const { RiskControlDetectedError } = await import('../../dist/browser/RiskControlDetector.js')
+    const calls = []
+    const bot = {
+        isMobile: true,
+        currentAccountEmail: 'risk@example.com',
+        config: {
+            searchSettings: {
+                scrollRandomResults: true,
+                clickRandomResults: 1,
+                searchDelay: { min: 0, max: 0 }
+            }
+        },
+        logger: {
+            info() {},
+            debug() {},
+            warn() {},
+            error() {}
+        },
+        browser: {
+            utils: {
+                async ghostClick() {},
+                async humanType() {},
+                async randomScroll() {},
+                async assertNoRiskControlPrompt(page, stage, email) {
+                    calls.push([stage, email])
+                    throw new RiskControlDetectedError({
+                        accountEmail: email,
+                        stage,
+                        matchedSelector: null,
+                        matchedText: 'searches are temporarily limited',
+                        message: 'risk stop'
+                    })
+                }
+            },
+            func: {
+                async getSearchPoints() {
+                    throw new Error('should not read counters after risk control')
+                }
+            }
+        },
+        utils: {
+            async wait() {},
+            randomDelay() {
+                return 0
+            },
+            randomNumber() {
+                return 1
+            }
+        }
+    }
+
+    const search = new Search(bot)
+    const page = {
+        async goto() {},
+        async evaluate(fn) {
+            if (String(fn).includes('innerHeight')) return 800
+            if (String(fn).includes('scrollHeight')) return 1000
+            if (String(fn).includes('scrollY')) return 0
+            return null
+        },
+        locator() {
+            return {
+                async waitFor() {},
+                async fill() {}
+            }
+        },
+        keyboard: {
+            async press() {}
+        },
+        mouse: {
+            async wheel() {}
+        }
+    }
+
+    await assert.rejects(() => search.bingSearch(page, 'risk query', true), /risk stop/)
+    assert.deepEqual(calls, [['search-bing-results', 'risk@example.com']])
+})
+
+test('Search.doSearch rethrows risk control errors instead of returning partial points', async () => {
+    const Search = await loadSearch()
+    const { QueryCore } = await import('../../dist/functions/QueryEngine.js')
+    const { RiskControlDetectedError } = await import('../../dist/browser/RiskControlDetector.js')
+
+    const originalQueryManager = QueryCore.prototype.queryManager
+    QueryCore.prototype.queryManager = async () => ['risk query']
+
+    try {
+        const riskError = new RiskControlDetectedError({
+            accountEmail: 'risk@example.com',
+            stage: 'search-bing-results',
+            matchedSelector: null,
+            matchedText: 'searches are temporarily limited',
+            message: 'risk stop'
+        })
+
+        const bot = {
+            isMobile: true,
+            currentAccountEmail: 'risk@example.com',
+            userData: {
+                geoLocale: 'US',
+                langCode: 'en',
+                currentPoints: 0,
+                gainedPoints: 0
+            },
+            config: {
+                searchSettings: {
+                    queryEngines: ['local']
+                }
+            },
+            logger: {
+                info() {},
+                debug() {},
+                warn() {},
+                error() {}
+            },
+            browser: {
+                utils: {
+                    async tryDismissAllMessages() {}
+                },
+                func: {
+                    async getSearchPoints() {
+                        return {}
+                    },
+                    missingSearchPoints() {
+                        return {
+                            totalPoints: 10,
+                            mobilePoints: 10,
+                            desktopPoints: 0,
+                            edgePoints: 0
+                        }
+                    }
+                }
+            },
+            utils: {
+                shuffleArray(value) {
+                    return value
+                }
+            }
+        }
+
+        const search = new Search(bot)
+        search.bingSearch = async () => {
+            throw riskError
+        }
+
+        const page = {
+            async goto() {}
+        }
+
+        await assert.rejects(() => search.doSearch({}, page, true), /risk stop/)
+    } finally {
+        QueryCore.prototype.queryManager = originalQueryManager
+    }
 })
 
 test('SearchManager.doDesktopSearchSequential keeps the account in execution context', async () => {

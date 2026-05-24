@@ -390,6 +390,37 @@ test('earnings checkpoint ignores account progress until the initial balance is 
     assert.equal(checkpoint.accountStats[0].email, 'done@example.com')
 })
 
+test('trackTask records task-level point deltas and failures', async () => {
+    const mod = await loadBotModule()
+    const { MicrosoftRewardsBot } = mod
+    const bot = Object.create(MicrosoftRewardsBot.prototype)
+
+    bot.userData = {
+        currentPoints: 100
+    }
+    bot.currentTaskStats = []
+
+    await bot.trackTask('daily-set', '每日任务', async () => {
+        bot.userData.currentPoints = 115
+    })
+    await assert.rejects(
+        () =>
+            bot.trackTask('searches', '搜索', async () => {
+                bot.userData.currentPoints = 120
+                throw new Error('搜索失败')
+            }),
+        /搜索失败/
+    )
+
+    assert.deepEqual(
+        bot.currentTaskStats.map(item => [item.key, item.status, item.collectedPoints, item.error || null]),
+        [
+            ['daily-set', 'success', 15, null],
+            ['searches', 'failed', 5, '搜索失败']
+        ]
+    )
+})
+
 test('mergeAccountStats keeps worker progress when final stats are missing', async () => {
     const mod = await loadBotModule()
     const { MicrosoftRewardsBot } = mod

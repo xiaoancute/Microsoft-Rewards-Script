@@ -6,6 +6,7 @@ import { QueryCore } from '../../QueryEngine'
 import { Workers } from '../../Workers'
 import { getCurrentContext } from '../../../index'
 import type { QueryEngine } from '../../../interface/Config'
+import { RiskControlDetectedError } from '../../../browser/RiskControlDetector'
 
 /**
  * 必应搜索类，负责执行必应搜索以获取积分
@@ -277,6 +278,10 @@ export class Search extends Workers {
 
             return totalGainedPoints
         } catch (error) {
+            if (error instanceof RiskControlDetectedError) {
+                throw error
+            }
+
             this.bot.logger.error(
                 isMobile,
                 'SEARCH-BING',
@@ -344,6 +349,12 @@ export class Search extends Workers {
 
                 await this.bot.utils.wait(3000)
 
+                await this.bot.browser.utils.assertNoRiskControlPrompt(
+                    searchPage,
+                    'search-bing-results',
+                    this.bot.currentAccountEmail || 'unknown-account'
+                )
+
                 if (this.bot.config.searchSettings.scrollRandomResults) {
                     await this.bot.utils.wait(2000)
                     await this.randomScroll(searchPage, isMobile)
@@ -378,6 +389,10 @@ export class Search extends Workers {
 
                 return counters
             } catch (error) {
+                if (error instanceof RiskControlDetectedError) {
+                    throw error
+                }
+
                 if (i >= 5) {
                     this.bot.logger.error(
                         isMobile,

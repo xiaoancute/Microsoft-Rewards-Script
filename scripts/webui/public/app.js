@@ -400,7 +400,7 @@ async function loadAccounts() {
 function renderAccounts() {
     const tbody = document.getElementById('accounts-tbody')
     if (state.accounts.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" class="empty">还没有账号，点右上角「+ 添加账号」</td></tr>'
+        tbody.innerHTML = '<tr><td colspan="8" class="empty">还没有账号，点右上角「+ 添加账号」</td></tr>'
         if (state.pendingAccountFocus) {
             toast(`账号页里找不到 ${state.pendingAccountFocus}，它可能只存在于历史报表中`, 'err')
             state.pendingAccountFocus = null
@@ -416,6 +416,7 @@ function renderAccounts() {
         if (acc.saveFingerprint?.desktop) fingerprint.push('桌面')
         tr.innerHTML = `
             <td>${escapeHtml(acc.email)}</td>
+            <td>${acc.enabled === false ? '<span class="badge warn">已停用</span>' : '<span class="badge ok">启用</span>'}</td>
             <td>${escapeHtml(acc.geoLocale || '-')}</td>
             <td>${escapeHtml(acc.langCode || '-')}</td>
             <td>${acc.hasTotpSecret ? '<span class="badge ok">已开</span>' : '<span class="badge">未开</span>'}</td>
@@ -485,6 +486,7 @@ function openAccountDialog(account) {
     if (account) {
         accountForm.email.value = account.email
         accountForm.email.readOnly = true
+        accountForm.enabled.checked = account.enabled !== false
         accountForm.totpSecret.value = ''
         accountForm.recoveryEmail.value = account.recoveryEmail || ''
         accountForm.geoLocale.value = account.geoLocale || 'auto'
@@ -499,6 +501,7 @@ function openAccountDialog(account) {
         accountForm['saveFingerprint.desktop'].checked = Boolean(account.saveFingerprint?.desktop)
     } else {
         accountForm.email.readOnly = false
+        accountForm.enabled.checked = true
         accountForm['saveFingerprint.mobile'].checked = true
         accountForm['saveFingerprint.desktop'].checked = true
     }
@@ -518,6 +521,7 @@ accountForm.addEventListener('submit', async event => {
         : []
     const payload = {
         email: fd.get('email'),
+        enabled: accountForm.enabled.checked,
         password: fd.get('password') || undefined,
         totpSecret: fd.get('totpSecret') || undefined,
         recoveryEmail: fd.get('recoveryEmail') || undefined,
@@ -746,6 +750,12 @@ function renderConfig() {
         checkboxField('quietHours.enabled', cfg.quietHours?.enabled ?? false, '启用'),
         textField('quietHours.start', cfg.quietHours?.start ?? '01:00', '开始时间 HH:MM'),
         textField('quietHours.end', cfg.quietHours?.end ?? '06:00', '结束时间 HH:MM（早于开始 = 跨午夜）')
+    ]))
+
+    form.appendChild(section('账号健康保护', [
+        checkboxField('accountHealth.autoSkip.enabled', cfg.accountHealth?.autoSkip?.enabled ?? true, '自动跳过异常账号'),
+        numberField('accountHealth.autoSkip.riskCooldownHours', cfg.accountHealth?.autoSkip?.riskCooldownHours ?? 24, '风控冷却小时'),
+        numberField('accountHealth.autoSkip.maxConsecutiveFailures', cfg.accountHealth?.autoSkip?.maxConsecutiveFailures ?? 3, '连续失败跳过阈值')
     ]))
 
     form.appendChild(section('Webhook · Discord', [
@@ -1143,7 +1153,10 @@ function renderReports(report, filters = state.reportFilters) {
 
     renderProblemAccounts(report.accounts || [], { isEmpty, selectedAccount })
     renderFailureBuckets(report.failureBuckets || [], { isEmpty })
+    renderAccountHealth(report.health, { selectedAccount })
+    renderFailureSnapshots(report.failureSnapshots || [], { selectedAccount })
     renderReportDaily(report.daily || [], { isEmpty })
+    renderReportTasks(report.taskSummary || [], { isEmpty })
     renderReportAccounts(report.accounts || [], { isEmpty, selectedAccount })
     renderReportRuns(report.recentRuns || [], { isEmpty })
 }
@@ -1240,7 +1253,66 @@ function formatFailureBucketLabel(key) {
 function formatStatusBadge(status) {
     if (status === 'risk_control') return '<span class="badge warn">风控停止</span>'
     if (status === 'failed') return '<span class="badge warn">异常</span>'
+    if (status === 'no_data') return '<span class="badge">暂无数据</span>'
     return '<span class="badge ok">正常</span>'
+}
+
+function formatHealthBadge(item) {
+    const score = Number(item?.score ?? 0)
+    if (item?.level === 'risk') return `<span class="badge warn">${score} · 风险</span>`
+    if (item?.level === 'warning') return `<span class="badge warn">${score} · 关注</span>`
+    if (item?.level === 'unknown') return `<span class="badge">${score} · 未运行</span>`
+    return `<span class="badge ok">${score} · 健康</span>`
+}
+
+function renderAccountHealth(health, { selectedAccount }) {
+    const tbody = document.getElementById('reports-health-tbody')
+    const accounts = health?.accounts || []
+
+    if (!accounts.length) {
+        tbody.innerHTML = `<tr><td colspan="7" class="empty">${selectedAccount !== 'all' ? '当前账号暂无健康数据' : '暂无账号健康数据'}</td></tr>`
+        return
+    }
+
+    tbody.innerHTML = accounts.map(item => {
+        const suggestion = item.suggestion
+            ? `<span title="${escapeAttr(item.suggestion)}">${escapeHtml(truncateText(item.suggestion, 34))}</span>`
+            : '-'
+        return '<tr>' +
+            `<td>${escapeHtml(item.email)}</td>` +
+            `<td>${formatHealthBadge(item)}</td>` +
+            `<td>${formatStatusBadge(item.status)}</td>` +
+            `<td>${item.consecutiveFailures || 0}</td>` +
+            `<td>${suggestion}</td>` +
+            `<td>${formatDateTime(item.lastSuccessAt)}</td>` +
+            `<td>${formatDateTime(item.lastFailureAt)}</td>` +
+            '</tr>'
+    }).join('')
+}
+
+function renderFailureSnapshots(items, { selectedAccount }) {
+    const tbody = document.getElementById('reports-snapshots-tbody')
+    if (!items.length) {
+        tbody.innerHTML = `<tr><td colspan="6" class="empty">${selectedAccount !== 'all' ? '当前账号暂无失败现场' : '暂无失败现场记录'}</td></tr>`
+        return
+    }
+
+    tbody.innerHTML = items.map(item => {
+        const error = item.error
+            ? `<span class="badge warn" title="${escapeAttr(item.error)}">${escapeHtml(truncateText(item.error, 28))}</span>`
+            : `<span class="badge">${escapeHtml(formatFailureBucketLabel(item.failureBucket))}</span>`
+        const url = item.url
+            ? `<span title="${escapeAttr(item.url)}">${escapeHtml(truncateText(item.url, 42))}</span>`
+            : '-'
+        return '<tr>' +
+            `<td>${formatDateTime(item.capturedAt)}</td>` +
+            `<td>${escapeHtml(item.account)}</td>` +
+            `<td>${escapeHtml(item.stage || 'unknown')}</td>` +
+            `<td>${error}</td>` +
+            `<td>${escapeHtml(item.pageTitle || '-')}</td>` +
+            `<td>${url}</td>` +
+            '</tr>'
+    }).join('')
 }
 
 function truncateText(value, maxLength = 24) {
@@ -1264,6 +1336,24 @@ function renderReportDaily(items, { isEmpty }) {
             '<td>' + (item.successCount || 0) + ' / ' + (item.failedCount || 0) + '</td>' +
             '<td>' + risk + '</td>' +
             '<td>' + formatDuration(item.totalDuration || 0) + '</td>' +
+            '</tr>'
+    }).join('')
+}
+
+function renderReportTasks(items, { isEmpty }) {
+    const tbody = document.getElementById('reports-task-tbody')
+    if (isEmpty || items.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="empty">暂无任务级收益记录</td></tr>'
+        return
+    }
+
+    tbody.innerHTML = items.map(item => {
+        return '<tr>' +
+            `<td>${escapeHtml(item.label || item.key)}</td>` +
+            `<td>${item.accountCount || 0}</td>` +
+            `<td><span class="badge ok">${formatPoints(item.collectedPoints || 0)}</span></td>` +
+            `<td>${item.successCount || 0} / ${item.failedCount || 0} / ${item.skippedCount || 0}</td>` +
+            `<td>${formatDuration(item.totalDuration || 0)}</td>` +
             '</tr>'
     }).join('')
 }
@@ -1383,6 +1473,7 @@ document.getElementById('reports-range')?.addEventListener('change', loadReports
 document.getElementById('reports-account')?.addEventListener('change', loadReports)
 document.getElementById('btn-reports-failures-loghistory')?.addEventListener('click', () => switchTab('loghistory'))
 document.getElementById('btn-reports-runs-loghistory')?.addEventListener('click', () => switchTab('loghistory'))
+document.getElementById('btn-reports-snapshots-loghistory')?.addEventListener('click', () => switchTab('loghistory'))
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Utils

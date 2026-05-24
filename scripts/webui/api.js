@@ -117,6 +117,7 @@ function sanitizeAccountForWire(account) {
     const { password, proxy, totpSecret, ...rest } = account
     return {
         ...rest,
+        enabled: account.enabled !== false,
         hasPassword: Boolean(password),
         hasTotpSecret: Boolean(totpSecret),
         proxy: proxy ? { ...proxy, password: proxy.password ? '***' : '' } : undefined
@@ -131,6 +132,7 @@ export function listAccounts(projectRoot) {
 function defaultAccount(email, password) {
     return {
         email,
+        enabled: true,
         password,
         totpSecret: '',
         recoveryEmail: '',
@@ -337,6 +339,15 @@ function validateConfigShape(config) {
     if (!config.workers || typeof config.workers !== 'object') throw new Error('workers 必须是对象')
     if (!config.searchSettings || typeof config.searchSettings !== 'object')
         throw new Error('searchSettings 必须是对象')
+    if (config.accountHealth?.autoSkip) {
+        const autoSkip = config.accountHealth.autoSkip
+        if (autoSkip.enabled !== undefined && typeof autoSkip.enabled !== 'boolean')
+            throw new Error('accountHealth.autoSkip.enabled 必须是布尔')
+        if (autoSkip.riskCooldownHours !== undefined && Number(autoSkip.riskCooldownHours) <= 0)
+            throw new Error('accountHealth.autoSkip.riskCooldownHours 必须大于 0')
+        if (autoSkip.maxConsecutiveFailures !== undefined && Number(autoSkip.maxConsecutiveFailures) <= 0)
+            throw new Error('accountHealth.autoSkip.maxConsecutiveFailures 必须大于 0')
+    }
 }
 
 export async function saveConfig(projectRoot, next) {

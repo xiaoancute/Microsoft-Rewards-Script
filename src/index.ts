@@ -23,6 +23,7 @@ import { SearchManager } from './functions/SearchManager'
 
 import type { Account } from './interface/Account'
 import AxiosClient from './util/Axios'
+import { selectRunnableAccounts } from './accounts/AccountRunPolicy'
 import { sendDiscord, flushDiscordQueue } from './logging/Discord'
 import { sendNtfy, flushNtfyQueue } from './logging/Ntfy'
 import { sendPushPlus, flushPushPlusQueue } from './logging/PushPlus'
@@ -34,12 +35,14 @@ import {
     mergeAccountStats,
     normalizePointValue,
     type AccountStats,
+    type TaskStats,
     upsertAccountStat
 } from './reporting/EarningsStats'
 
 const PROJECT_ROOT = path.resolve(__dirname, '..')
 const {
     appendEarningsRun,
+    appendFailureSnapshot,
     writeEarningsCheckpoint,
     clearEarningsCheckpoint,
     recoverEarningsCheckpoint
@@ -53,6 +56,19 @@ const {
             accountStats: AccountStats[]
             hadWorkerFailure?: boolean
             riskControlStopped?: boolean
+        }
+    ) => Promise<unknown>
+    appendFailureSnapshot: (
+        projectRoot: string,
+        input: {
+            runId?: string
+            account: string
+            stage?: string
+            error?: string
+            url?: string
+            pageTitle?: string
+            riskControlStopped?: boolean
+            capturedAt?: number
         }
     ) => Promise<unknown>
     writeEarningsCheckpoint: (
@@ -155,6 +171,7 @@ export class MicrosoftRewardsBot {
     private currentRunStartTime = 0
     private currentAccountStartTime = 0
     private currentAccountProgressReady = false
+    private currentTaskStats: TaskStats[] = []
     private completedAccountStats: AccountStats[] = []
     private earningsReportWritten = false
     private earningsReportFlushPromise: Promise<void> | null = null
@@ -256,6 +273,7 @@ export class MicrosoftRewardsBot {
         this.currentRunId = `${new Date(runStartTime).toISOString()}-${process.pid}`
         this.currentRunStartTime = runStartTime
         this.completedAccountStats = []
+        this.currentTaskStats = []
         this.earningsReportWritten = false
         this.earningsReportFlushPromise = null
         this.earningsCheckpointPromise = null
@@ -274,6 +292,7 @@ export class MicrosoftRewardsBot {
         this.currentAccountEmail = accountEmail
         this.currentAccountStartTime = accountStartTime
         this.currentAccountProgressReady = false
+        this.currentTaskStats = []
 
         this.accountProgressTimer = setInterval(() => {
             this.queueEarningsCheckpoint('account-progress')
@@ -317,7 +336,8 @@ export class MicrosoftRewardsBot {
             duration: parseFloat(duration.toFixed(1)),
             success: false,
             error: `运行中断: ${reason}`,
-            riskControlStopped: this.riskControlStopping
+            riskControlStopped: this.riskControlStopping,
+            taskStats: [...(this.currentTaskStats ?? [])]
         }
     }
 
@@ -466,11 +486,91 @@ export class MicrosoftRewardsBot {
             email: accountEmail,
             initialPoints: 0,
             finalPoints: 0,
-            collectedPoints: 0,
-            duration: parseFloat(durationSeconds),
-            success: false,
-            error,
-            riskControlStopped
+                collectedPoints: 0,
+                duration: parseFloat(durationSeconds),
+                success: false,
+                error,
+                riskControlStopped,
+                taskStats: [...(this.currentTaskStats ?? [])]
+        }
+    }
+
+    private async trackTask<T>(key: string, label: string, task: () => Promise<T>): Promise<T> {
+        const startedAt = Date.now()
+        const initialPoints = this.normalizePointValue(this.userData?.currentPoints)
+
+        try {
+            const result = await task()
+            const finalPoints = this.normalizePointValue(this.userData?.currentPoints, initialPoints)
+            this.currentTaskStats.push({
+                key,
+                label,
+                status: 'success',
+                initialPoints,
+                finalPoints,
+                collectedPoints: Math.max(0, finalPoints - initialPoints),
+                duration: parseFloat(((Date.now() - startedAt) / 1000).toFixed(1))
+            })
+            return result
+        } catch (error) {
+            const finalPoints = this.normalizePointValue(this.userData?.currentPoints, initialPoints)
+            this.currentTaskStats.push({
+                key,
+                label,
+                status: 'failed',
+                initialPoints,
+                finalPoints,
+                collectedPoints: Math.max(0, finalPoints - initialPoints),
+                duration: parseFloat(((Date.now() - startedAt) / 1000).toFixed(1)),
+                error: error instanceof Error ? error.message : String(error)
+            })
+            throw error
+        }
+    }
+
+    private async captureFailurePageContext(): Promise<{ url?: string; pageTitle?: string }> {
+        for (const page of [this.mainMobilePage, this.mainDesktopPage]) {
+            if (!page) continue
+
+            try {
+                if (typeof page.isClosed === 'function' && page.isClosed()) {
+                    continue
+                }
+
+                const url = page.url()
+                const pageTitle = await page.title().catch(() => undefined)
+                if (url || pageTitle) {
+                    return { url, pageTitle }
+                }
+            } catch {}
+        }
+
+        return {}
+    }
+
+    private async appendFailureSnapshot(
+        accountEmail: string,
+        stage: string,
+        error: string,
+        riskControlStopped = false
+    ): Promise<void> {
+        try {
+            const pageContext = await this.captureFailurePageContext()
+            await appendFailureSnapshot(this.getProjectRoot(), {
+                runId: this.currentRunId || undefined,
+                account: accountEmail,
+                stage,
+                error,
+                riskControlStopped,
+                capturedAt: Date.now(),
+                ...pageContext
+            })
+        } catch (snapshotError) {
+            this.logger.debug(
+                'main',
+                'FAILURE-SNAPSHOT',
+                `失败现场写入失败: ${snapshotError instanceof Error ? snapshotError.message : String(snapshotError)}`
+            )
         }
     }
 
@@ -547,16 +647,36 @@ export class MicrosoftRewardsBot {
 
     // 运行主要的积分收集流程
     async run(): Promise<void> {
+        const skipped = []
+        await this.recoverInterruptedEarningsReport()
+        if (cluster.isPrimary) {
+            const selected = selectRunnableAccounts({
+                projectRoot: this.getProjectRoot(),
+                accounts: this.accounts,
+                config: this.config
+            })
+            this.accounts = selected.runnable
+            skipped.push(...selected.skipped)
+        }
         const totalAccounts = this.accounts.length
         const runStartTime = Date.now()
-        await this.recoverInterruptedEarningsReport()
         this.beginEarningsRun(runStartTime)
+
+        for (const item of skipped) {
+            this.logger.warn('main', 'ACCOUNT-SKIP', `${item.email} 已跳过 | reason=${item.reason} | ${item.detail}`)
+        }
 
         this.logger.info(
             'main',
             'RUN-START',
-            `启动微软奖励脚本 | v${pkg.version} | 账户数: ${totalAccounts} | 集群数: ${this.config.clusters}`
+            `启动微软奖励脚本 | v${pkg.version} | 账户数: ${totalAccounts} | 已跳过: ${skipped.length} | 集群数: ${this.config.clusters}`
         )
+
+        if (totalAccounts === 0) {
+            this.logger.warn('main', 'RUN-SKIP', '没有可运行账号，任务结束')
+            await flushAllWebhooks()
+            return
+        }
 
         // 风控告警：clusters>1 的场景下，如果多个账号共享同一出口 IP（都没配 proxy），
         // 微软会很容易把它们识别为同源批量作业。启动时一次性提醒。
@@ -808,7 +928,8 @@ export class MicrosoftRewardsBot {
                         finalPoints: accountFinalPoints,
                         collectedPoints: collectedPoints,
                         duration: parseFloat(durationSeconds),
-                        success: true
+                        success: true,
+                        taskStats: [...this.currentTaskStats]
                     }
                     accountStats.push(stat)
                     this.rememberCompletedAccountStat(stat)
@@ -824,6 +945,7 @@ export class MicrosoftRewardsBot {
                     const stat = this.buildInterruptedAccountStat(accountEmail, accountStartTime, '流程失败')
                     accountStats.push(stat)
                     this.rememberCompletedAccountStat(stat)
+                    await this.appendFailureSnapshot(accountEmail, 'flow', stat.error || '流程失败')
                     this.finishAccountProgress(accountEmail)
                 }
             } catch (error) {
@@ -831,6 +953,7 @@ export class MicrosoftRewardsBot {
                     const stat = this.buildInterruptedAccountStat(accountEmail, accountStartTime, error.message, true)
                     accountStats.push(stat)
                     this.rememberCompletedAccountStat(stat)
+                    await this.appendFailureSnapshot(accountEmail, 'risk-control', error.message, true)
                     this.finishAccountProgress(accountEmail)
                     throw error
                 }
@@ -846,6 +969,7 @@ export class MicrosoftRewardsBot {
                 const stat = this.buildInterruptedAccountStat(accountEmail, accountStartTime, errorMessage)
                 accountStats.push(stat)
                 this.rememberCompletedAccountStat(stat)
+                await this.appendFailureSnapshot(accountEmail, 'account', errorMessage)
                 this.finishAccountProgress(accountEmail)
             }
         }
@@ -964,35 +1088,45 @@ export class MicrosoftRewardsBot {
                 )
 
                 if (this.config.workers.doAppPromotions) {
-                    await this.workers.doAppPromotions(appData)
+                    await this.trackTask('app-promotions', 'App 活动', () => this.workers.doAppPromotions(appData))
                     this.checkpointEarningsProgress('app-promotions')
                 }
                 if (this.config.workers.doDailySet) {
-                    await this.workers.doDailySet(data, this.mainMobilePage)
+                    await this.trackTask('daily-set', '每日任务', () =>
+                        this.workers.doDailySet(data, this.mainMobilePage)
+                    )
                     this.checkpointEarningsProgress('daily-set')
                 }
                 if (this.config.workers.doSpecialPromotions) {
-                    await this.workers.doSpecialPromotions(data, this.mainMobilePage)
+                    await this.trackTask('special-promotions', '特殊活动', () =>
+                        this.workers.doSpecialPromotions(data, this.mainMobilePage)
+                    )
                     this.checkpointEarningsProgress('special-promotions')
                 }
                 if (this.config.workers.doMorePromotions) {
-                    await this.workers.doMorePromotions(data, this.mainMobilePage)
+                    await this.trackTask('more-promotions', '更多活动', () =>
+                        this.workers.doMorePromotions(data, this.mainMobilePage)
+                    )
                     this.checkpointEarningsProgress('more-promotions')
                 }
                 if (this.config.workers.doDailyCheckIn) {
-                    await this.activities.doDailyCheckIn()
+                    await this.trackTask('daily-check-in', '每日签到', () => this.activities.doDailyCheckIn())
                     this.checkpointEarningsProgress('daily-check-in')
                 }
                 if (this.config.workers.doReadToEarn) {
-                    await this.activities.doReadToEarn()
+                    await this.trackTask('read-to-earn', '阅读赚取', () => this.activities.doReadToEarn())
                     this.checkpointEarningsProgress('read-to-earn')
                 }
                 if (this.config.workers.doPunchCards) {
-                    await this.workers.doPunchCards(data, this.mainMobilePage)
+                    await this.trackTask('punch-cards', 'Punch Cards', () =>
+                        this.workers.doPunchCards(data, this.mainMobilePage)
+                    )
                     this.checkpointEarningsProgress('punch-cards')
                 }
                 if (this.rewardsVersion === 'modern' && this.panelData) {
-                    await this.workers.doModernPanelPromotions(this.panelData, data, this.mainMobilePage)
+                    await this.trackTask('modern-panel', '现代面板', () =>
+                        this.workers.doModernPanelPromotions(this.panelData, data, this.mainMobilePage)
+                    )
                     this.checkpointEarningsProgress('modern-panel')
                 }
 
@@ -1001,12 +1135,8 @@ export class MicrosoftRewardsBot {
 
                 this.cookies.mobile = await initialContext.cookies()
 
-                const { mobilePoints, desktopPoints } = await this.searchManager.doSearches(
-                    data,
-                    missingSearchPoints,
-                    mobileSession,
-                    account,
-                    accountEmail
+                const { mobilePoints, desktopPoints } = await this.trackTask('searches', '搜索', () =>
+                    this.searchManager.doSearches(data, missingSearchPoints, mobileSession!, account, accountEmail)
                 )
                 this.checkpointEarningsProgress('searches')
 

@@ -11,8 +11,11 @@ const {
     appendEarningsRun,
     readEarningsReport,
     earningsCheckpointFile,
+    failureSnapshotsFile,
     writeEarningsCheckpoint,
-    recoverEarningsCheckpoint
+    recoverEarningsCheckpoint,
+    appendFailureSnapshot,
+    readFailureSnapshots
 } = require('../../earnings-report.cjs')
 
 async function makeProjectRoot() {
@@ -32,7 +35,27 @@ test('appendEarningsRun writes a structured JSONL run record', async () => {
                 finalPoints: 130,
                 collectedPoints: 30,
                 duration: 42.5,
-                success: true
+                success: true,
+                taskStats: [
+                    {
+                        key: 'daily-set',
+                        label: '每日任务',
+                        status: 'success',
+                        initialPoints: 100,
+                        finalPoints: 110,
+                        collectedPoints: 10,
+                        duration: 3.5
+                    },
+                    {
+                        key: 'searches',
+                        label: '搜索',
+                        status: 'success',
+                        initialPoints: 110,
+                        finalPoints: 130,
+                        collectedPoints: 20,
+                        duration: 39
+                    }
+                ]
             },
             {
                 email: 'bad@example.com',
@@ -53,6 +76,111 @@ test('appendEarningsRun writes a structured JSONL run record', async () => {
     assert.equal(record.totalCollectedPoints, 30)
     assert.equal(record.failedCount, 1)
     assert.equal(JSON.parse(lines[0]).accounts[1].error, '流程失败')
+    assert.equal(JSON.parse(lines[0]).accounts[0].taskStats[0].key, 'daily-set')
+    assert.equal(JSON.parse(lines[0]).accounts[0].taskStats[1].collectedPoints, 20)
+})
+
+test('readEarningsReport aggregates task-level earning summaries', async () => {
+    const projectRoot = await makeProjectRoot()
+
+    await appendEarningsRun(projectRoot, {
+        runStartedAt: '2026-04-24T01:00:00.000Z',
+        runFinishedAt: '2026-04-24T01:05:00.000Z',
+        accountStats: [
+            {
+                email: 'ok@example.com',
+                initialPoints: 100,
+                finalPoints: 135,
+                collectedPoints: 35,
+                duration: 60,
+                success: true,
+                taskStats: [
+                    {
+                        key: 'daily-set',
+                        label: '每日任务',
+                        status: 'success',
+                        initialPoints: 100,
+                        finalPoints: 110,
+                        collectedPoints: 10,
+                        duration: 10
+                    },
+                    {
+                        key: 'searches',
+                        label: '搜索',
+                        status: 'success',
+                        initialPoints: 110,
+                        finalPoints: 135,
+                        collectedPoints: 25,
+                        duration: 50
+                    }
+                ]
+            },
+            {
+                email: 'bad@example.com',
+                initialPoints: 50,
+                finalPoints: 50,
+                collectedPoints: 0,
+                duration: 20,
+                success: false,
+                error: '搜索失败',
+                taskStats: [
+                    {
+                        key: 'searches',
+                        label: '搜索',
+                        status: 'failed',
+                        initialPoints: 50,
+                        finalPoints: 50,
+                        collectedPoints: 0,
+                        duration: 20,
+                        error: '搜索失败'
+                    }
+                ]
+            }
+        ]
+    })
+
+    const report = readEarningsReport(projectRoot, {
+        range: 'today',
+        timezoneOffsetMinutes: 0,
+        now: '2026-04-24T12:00:00.000Z'
+    })
+
+    const dailySet = report.taskSummary.find(item => item.key === 'daily-set')
+    const searches = report.taskSummary.find(item => item.key === 'searches')
+
+    assert.equal(dailySet.collectedPoints, 10)
+    assert.equal(dailySet.successCount, 1)
+    assert.equal(dailySet.failedCount, 0)
+    assert.equal(searches.collectedPoints, 25)
+    assert.equal(searches.successCount, 1)
+    assert.equal(searches.failedCount, 1)
+    assert.equal(searches.accountCount, 2)
+})
+
+test('appendFailureSnapshot writes redacted lightweight failure context', async () => {
+    const projectRoot = await makeProjectRoot()
+
+    const snapshot = await appendFailureSnapshot(projectRoot, {
+        runId: 'run-secret',
+        account: 'bad@example.com',
+        stage: 'login',
+        error: 'OAuth failed with access_token=SECRET_TOKEN',
+        url: 'https://login.live.com/oauth20?code=SECRET_CODE&state=ok',
+        pageTitle: '登录页',
+        riskControlStopped: false,
+        capturedAt: '2026-04-24T01:02:00.000Z'
+    })
+
+    const content = await fs.readFile(failureSnapshotsFile(projectRoot), 'utf8')
+    const snapshots = readFailureSnapshots(projectRoot)
+
+    assert.equal(snapshot.account, 'bad@example.com')
+    assert.equal(snapshot.failureBucket, 'login')
+    assert.equal(content.includes('SECRET_TOKEN'), false)
+    assert.equal(content.includes('SECRET_CODE'), false)
+    assert.equal(snapshots.length, 1)
+    assert.equal(snapshots[0].url, 'https://login.live.com/oauth20?code=[REDACTED]&state=ok')
+    assert.equal(snapshots[0].error, 'OAuth failed with access_token=[REDACTED]')
 })
 
 test('recoverEarningsCheckpoint appends interrupted completed accounts once', async () => {

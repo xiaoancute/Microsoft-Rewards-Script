@@ -25,6 +25,13 @@
     "riskControlStop": {
         "enabled": true
     },
+    "accountHealth": {
+        "autoSkip": {
+            "enabled": true,
+            "riskCooldownHours": 24,
+            "maxConsecutiveFailures": 3
+        }
+    },
     "searchSettings": {
         "scrollRandomResults": true,
         "clickRandomResults": 0.6,

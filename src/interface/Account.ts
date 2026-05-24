@@ -2,6 +2,8 @@ import type { QueryEngine } from './Config'
 
 export interface Account {
     email: string
+    /** false 表示临时停用该账号，运行时和 Docker cron 都会跳过。 */
+    enabled?: boolean
     password: string
     totpSecret?: string
     recoveryEmail: string

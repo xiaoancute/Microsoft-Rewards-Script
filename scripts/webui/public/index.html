@@ -120,6 +120,7 @@
                     <thead>
                         <tr>
                             <th>邮箱</th>
+                            <th>状态</th>
                             <th>地区</th>
                             <th>语言</th>
                             <th>2FA</th>
@@ -129,7 +130,7 @@
                         </tr>
                     </thead>
                     <tbody id="accounts-tbody">
-                        <tr><td colspan="7" class="empty">加载中...</td></tr>
+                        <tr><td colspan="8" class="empty">加载中...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -342,11 +343,41 @@
                 </div>
             </div>
             <div class="card">
+                <h3>账号健康</h3>
+                <div class="tablewrap">
+                    <table>
+                        <thead><tr><th>账号</th><th>健康度</th><th>状态</th><th>连续失败</th><th>建议动作</th><th>最近成功</th><th>最近失败</th></tr></thead>
+                        <tbody id="reports-health-tbody"><tr><td colspan="7" class="empty">暂无数据</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="card">
+                <div class="report-card-head">
+                    <h3>最近失败现场</h3>
+                    <button class="btn btn-sm" id="btn-reports-snapshots-loghistory">去历史日志</button>
+                </div>
+                <div class="tablewrap">
+                    <table>
+                        <thead><tr><th>时间</th><th>账号</th><th>阶段</th><th>原因</th><th>页面</th><th>URL</th></tr></thead>
+                        <tbody id="reports-snapshots-tbody"><tr><td colspan="6" class="empty">暂无数据</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="card">
                 <h3>每日收益</h3>
                 <div class="tablewrap">
                     <table>
                         <thead><tr><th>日期</th><th>运行</th><th>账号</th><th>收益</th><th>成功 / 失败</th><th>风控停止</th><th>耗时</th></tr></thead>
                         <tbody id="reports-daily-tbody"><tr><td colspan="7" class="empty">暂无数据</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="card">
+                <h3>任务收益</h3>
+                <div class="tablewrap">
+                    <table>
+                        <thead><tr><th>任务</th><th>账号结果</th><th>收益</th><th>成功 / 失败 / 跳过</th><th>耗时</th></tr></thead>
+                        <tbody id="reports-task-tbody"><tr><td colspan="5" class="empty">暂无数据</td></tr></tbody>
                     </table>
                 </div>
             </div>
@@ -399,6 +430,7 @@
     <dialog id="account-dialog">
         <form method="dialog" id="account-form">
             <h3 id="account-dialog-title">添加账号</h3>
+            <label class="inline"><input type="checkbox" name="enabled" checked /> 启用该账号</label>
             <label>邮箱 <input type="email" name="email" required /></label>
             <label>密码 <input type="password" name="password" /></label>
             <p class="field-hint" id="password-hint">新账号必填；编辑时留空表示保持不变</p>

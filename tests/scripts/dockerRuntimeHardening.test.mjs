@@ -113,5 +113,6 @@ test('compose and Dockerfile default to building this repo with runtime maintena
     assert.match(compose, /MRS_INSTANCE_ID:/)
 
     assert.match(dockerfile, /COPY --from=builder .*\/scripts\/docker \.\/scripts\/docker/)
+    assert.match(dockerfile, /COPY --from=builder .*\/account-run-policy\.cjs \.\/account-run-policy\.cjs/)
     assert.match(entrypoint.split('\n')[0], /bash/)
 })
