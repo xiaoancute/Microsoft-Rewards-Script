@@ -2,6 +2,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { chooseLogJobId, formatCurrentLogSourceLabel } from './job-ui.js'
+import { describeRunUiState, hasLoggedInSession } from './run-ui.js'
 
 const TOKEN_KEY = 'webui_token'
 const THEME_KEY = 'webui_theme'
@@ -172,8 +173,10 @@ async function loadDashboard() {
             api('/api/systemd').catch(() => null),
             api('/api/accounts')
         ])
+        const sessionsResult = await api('/api/sessions').catch(() => ({ sessions: state.sessions || [] }))
         state.status = status
-        renderDashboard(status, env, sched, accounts.accounts || [])
+        state.sessions = sessionsResult.sessions || []
+        renderDashboard(status, env, sched, accounts.accounts || [], state.sessions)
         // Also refresh the topbar status
         document.getElementById('status-dot').className = 'dot ok'
         document.getElementById('status-text').textContent = `连接正常 · ${status.nodeVersion}`
@@ -183,31 +186,36 @@ async function loadDashboard() {
     }
 }
 
-function renderDashboard(status, env, sched, accounts) {
+function renderDashboard(status, env, sched, accounts, sessions = []) {
     const capabilities = status.capabilities || currentCapabilities()
-    const externalRunning = Boolean(status.externalRun?.active)
     // Run card
-    const running = (status.jobs || []).find(j => j.running && j.kind === 'start')
     const runBig = document.getElementById('dash-run-state')
     const runSub = document.getElementById('dash-run-sub')
     const btnRunNow = document.getElementById('dash-run-now')
     const btnRunStop = document.getElementById('dash-run-stop')
-    if (running) {
-        runBig.textContent = '运行中'
+    const runState = describeRunUiState({
+        jobs: status.jobs || [],
+        externalRun: status.externalRun,
+        capabilities,
+        formatTime: value => new Date(value).toLocaleTimeString('zh-CN', { hour12: false })
+    })
+
+    if (runState.kind === 'running') {
+        runBig.textContent = runState.homeStateText
         runBig.className = 'dash-big run'
-        runSub.textContent = `任务 #${running.id} · ${new Date(running.startedAt).toLocaleTimeString('zh-CN', { hour12: false })} 开始`
+        runSub.textContent = runState.homeSubText
         btnRunNow.classList.add('hidden')
         btnRunStop.classList.remove('hidden')
-        btnRunStop.dataset.jobId = String(running.id)
+        btnRunStop.dataset.jobId = runState.stopJobId
         setDisabled(btnRunNow, false)
-    } else if (externalRunning) {
-        runBig.textContent = '运行中'
+    } else if (runState.kind === 'external') {
+        runBig.textContent = runState.homeStateText
         runBig.className = 'dash-big run'
-        runSub.textContent = '容器任务运行中 · 来自 cron / run_daily.sh'
+        runSub.textContent = runState.homeSubText
         btnRunNow.classList.add('hidden')
         btnRunStop.classList.add('hidden')
     } else {
-        runBig.textContent = '空闲'
+        runBig.textContent = runState.homeStateText
         runBig.className = 'dash-big'
         const lastFinished = (status.jobs || []).filter(j => !j.running && j.kind === 'start').pop()
         runSub.textContent = lastFinished
@@ -215,11 +223,7 @@ function renderDashboard(status, env, sched, accounts) {
             : '还没运行过'
         btnRunNow.classList.remove('hidden')
         btnRunStop.classList.add('hidden')
-        setDisabled(
-            btnRunNow,
-            !capabilities.canRunNow,
-            capabilities.canRunNow ? '' : '当前环境不支持立即运行'
-        )
+        setDisabled(btnRunNow, runState.startDisabled, capabilities.canRunNow ? '' : '当前环境不支持立即运行')
     }
 
     // Timer card
@@ -261,9 +265,13 @@ function renderDashboard(status, env, sched, accounts) {
 
     // Account card
     document.getElementById('dash-account-count').textContent = accounts.length
-    const hasSessions = accounts.filter(a => a).length > 0
+    const loggedInSessions = sessions.filter(session =>
+        hasLoggedInSession([session])
+    ).length
     document.getElementById('dash-account-sub').textContent =
-        accounts.length === 0 ? '点「去添加」配置第一个账号' : '到「Session」Tab 查看登录状态'
+        accounts.length === 0
+            ? '点「去添加」配置第一个账号'
+            : `${loggedInSessions}/${accounts.length} 个账号已有登录 Session`
 
     // Env card
     const failed = (env.checks || []).filter(c => !c.ok)
@@ -285,7 +293,7 @@ function renderDashboard(status, env, sched, accounts) {
     const chromiumOk = env.checks.find(c => c.name === 'Chromium 浏览器')?.ok
     const builtOk = env.checks.find(c => c.name === '项目已构建 (dist/)')?.ok
     const hasAccount = accounts.length > 0
-    const anyLogin = hasAccount && hasSessions
+    const anyLogin = hasAccount && hasLoggedInSession(sessions)
     const hasTimer = Boolean(sched?.reward?.active || sched?.reward?.enabled)
     const steps = isDockerRuntime()
         ? [
@@ -320,6 +328,7 @@ document.getElementById('dash-run-now').addEventListener('click', async () => {
 document.getElementById('dash-run-stop').addEventListener('click', async event => {
     const id = event.currentTarget.dataset.jobId
     if (!id) return
+    if (!confirm(`确认停止任务 #${id}？`)) return
     try {
         await api(`/api/jobs/${id}/stop`, { method: 'POST', body: {} })
         toast('已停止', 'ok')
@@ -695,9 +704,8 @@ function renderConfig() {
     const form = document.getElementById('config-form')
     form.innerHTML = ''
     const cfg = state.config
-    const canBuildProject = currentCapabilities().canBuildProject
-    document.getElementById('config-hint').innerHTML = canBuildProject
-        ? '改完保存后，下次运行立即生效。只有代码改动时，才需要 <button class="inline-link" id="btn-build-from-config">重新构建</button>。'
+    document.getElementById('config-hint').innerHTML = currentCapabilities().canBuildProject
+        ? '改完保存后，下次运行立即生效。代码维护动作已收口到「环境 & 修复」。'
         : '改完保存后，下次运行立即生效。Docker 运行时镜像不承担重新构建；如果改了 TypeScript 代码，请在宿主机重新构建镜像后再启动容器。'
 
     form.appendChild(section('核心', [
@@ -755,7 +763,7 @@ function renderConfig() {
     ]))
 
     form.appendChild(section('账号健康保护', [
-        checkboxField('accountHealth.autoSkip.enabled', cfg.accountHealth?.autoSkip?.enabled ?? true, '自动跳过异常账号'),
+        checkboxField('accountHealth.autoSkip.enabled', cfg.accountHealth?.autoSkip?.enabled ?? false, '自动跳过异常账号'),
         numberField('accountHealth.autoSkip.riskCooldownHours', cfg.accountHealth?.autoSkip?.riskCooldownHours ?? 24, '风控冷却小时'),
         numberField('accountHealth.autoSkip.maxConsecutiveFailures', cfg.accountHealth?.autoSkip?.maxConsecutiveFailures ?? 3, '连续失败跳过阈值')
     ]))
@@ -775,18 +783,6 @@ function renderConfig() {
         textField('webhook.pushplus.token', cfg.webhook?.pushplus?.token ?? '', 'token（从 pushplus.plus 获取）')
     ]))
 
-    const inlineBuild = document.getElementById('btn-build-from-config')
-    if (inlineBuild) {
-        inlineBuild.addEventListener('click', () => {
-            switchTab('logs')
-            startBuild()
-        })
-        setDisabled(
-            inlineBuild,
-            !canBuildProject,
-            canBuildProject ? '' : 'Docker 运行时镜像不支持在容器内重新构建'
-        )
-    }
 }
 
 function section(title, fields) {
@@ -917,34 +913,31 @@ function renderCurrentLogSource(jobId = chooseLogJobId(state.jobs)) {
 }
 
 function updateRunButtons() {
-    const running = state.jobs.find(j => j.running && j.kind === 'start')
-    const externalRunning = Boolean(state.status?.externalRun?.active) && !running
     const capabilities = currentCapabilities()
     const btnStart = document.getElementById('btn-run-start')
     const btnStop = document.getElementById('btn-run-stop')
-    const btnBuild = document.getElementById('btn-run-build')
     const pill = document.getElementById('job-status-pill')
-    setDisabled(
-        btnBuild,
-        !capabilities.canBuildProject,
-        capabilities.canBuildProject ? '' : 'Docker 运行时镜像不支持在容器内重新构建'
-    )
-    if (running) {
-        btnStart.disabled = true
+    const runState = describeRunUiState({
+        jobs: state.jobs,
+        externalRun: state.status?.externalRun,
+        capabilities
+    })
+    if (runState.kind === 'running') {
+        btnStart.disabled = runState.startDisabled
         btnStop.classList.remove('hidden')
-        btnStop.dataset.jobId = String(running.id)
+        btnStop.dataset.jobId = runState.stopJobId
         pill.className = 'pill run'
-        pill.textContent = `运行中 · 任务 #${running.id}`
-    } else if (externalRunning) {
-        btnStart.disabled = true
+        pill.textContent = runState.logPillText
+    } else if (runState.kind === 'external') {
+        btnStart.disabled = runState.startDisabled
         btnStop.classList.add('hidden')
         pill.className = 'pill run'
-        pill.textContent = '运行中 · 容器任务'
+        pill.textContent = runState.logPillText
     } else {
-        btnStart.disabled = !capabilities.canRunNow
+        btnStart.disabled = runState.startDisabled
         btnStop.classList.add('hidden')
         pill.className = 'pill'
-        pill.textContent = capabilities.canRunNow ? '空闲' : '当前环境不支持立即运行'
+        pill.textContent = runState.logPillText
     }
 }
 
@@ -960,25 +953,6 @@ document.getElementById('btn-run-start').addEventListener('click', async () => {
         toast(`启动失败: ${err.message}`, 'err')
     }
 })
-
-document.getElementById('btn-run-build').addEventListener('click', () => startBuild())
-
-async function startBuild() {
-    if (!currentCapabilities().canBuildProject) {
-        toast('Docker 运行时镜像不支持在容器内重新构建。修改 TypeScript 代码后请重建镜像。', 'err')
-        return
-    }
-    try {
-        const { jobId } = await api('/api/build', { method: 'POST', body: {} })
-        toast(`已启动构建 #${jobId}`, 'ok')
-        state.activeJobId = jobId
-        await loadJobs()
-        renderCurrentLogSource(jobId)
-        subscribeLogs(jobId)
-    } catch (err) {
-        toast(`构建失败: ${err.message}`, 'err')
-    }
-}
 
 document.getElementById('btn-run-stop').addEventListener('click', async event => {
     const id = event.currentTarget.dataset.jobId

@@ -265,12 +265,13 @@ export function buildPreflightReport(
     }
 
     if (externalRun?.active) {
+        const runLabel = externalRun.source === 'local-run-lock' ? '本地脚本' : '容器任务'
         checks.push(
             check(
                 'external-run',
                 '运行互斥',
                 'fail',
-                `已有容器任务运行中${externalRun.pid ? `，PID ${externalRun.pid}` : ''}`,
+                `已有${runLabel}运行中${externalRun.pid ? `，PID ${externalRun.pid}` : ''}`,
                 '等当前任务结束后再手动运行。'
             )
         )

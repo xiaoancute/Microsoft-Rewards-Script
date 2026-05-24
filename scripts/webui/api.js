@@ -370,7 +370,10 @@ export function getStatus(projectRoot, runner, options = {}) {
     const configSource = config?.path && config.path !== configExamplePath(projectRoot) ? config.path : null
     const runtime = detectRuntime(options.env || process.env)
     const capabilities = buildCapabilities(runtime, { platform: options.platform || process.platform })
-    const externalRun = readExternalRunStatus(runtime, options.externalRunOptions)
+    const externalRun = readExternalRunStatus(runtime, {
+        projectRoot,
+        ...options.externalRunOptions
+    })
     return {
         nodeVersion: process.version,
         projectRoot,

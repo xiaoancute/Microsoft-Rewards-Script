@@ -27,7 +27,7 @@
     },
     "accountHealth": {
         "autoSkip": {
-            "enabled": true,
+            "enabled": false,
             "riskCooldownHours": 24,
             "maxConsecutiveFailures": 3
         }

@@ -197,10 +197,10 @@ function serveStatic(req, res, urlPath) {
 // Router
 // ─────────────────────────────────────────────────────────────────────────────
 
-function buildRuntimeContext(env) {
+function buildRuntimeContext(env, projectRoot) {
     const runtime = detectRuntime(env)
     const capabilities = buildCapabilities(runtime)
-    const externalRun = readExternalRunStatus(runtime)
+    const externalRun = readExternalRunStatus(runtime, { projectRoot })
     return { runtime, capabilities, externalRun }
 }
 
@@ -224,7 +224,7 @@ async function handleApi(req, res, url, context) {
     const { pathname, searchParams } = url
     const method = req.method || 'GET'
     const { projectRoot, runner, env, host, port, token } = context
-    const runtimeContext = buildRuntimeContext(env)
+    const runtimeContext = buildRuntimeContext(env, projectRoot)
 
     // GET /api/status
     if (method === 'GET' && pathname === '/api/status') {

@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
+import fs from 'node:fs'
 import path from 'node:path'
 import cluster, { Worker } from 'cluster'
 import type { BrowserContext, Cookie, Page } from 'patchright'
@@ -177,6 +178,9 @@ export class MicrosoftRewardsBot {
     private earningsReportFlushPromise: Promise<void> | null = null
     private earningsCheckpointPromise: Promise<void> | null = null
     private accountProgressTimer: NodeJS.Timeout | null = null
+    private runLockFile = ''
+    private runLockAcquired = false
+    private runLockExitHandler: (() => void) | null = null
 
     private activeWorkers: number // 活跃的工作进程数
     private exitedWorkers: number[] // 已退出的工作进程PID数组
@@ -281,6 +285,98 @@ export class MicrosoftRewardsBot {
 
     private getProjectRoot(): string {
         return this.projectRoot || PROJECT_ROOT
+    }
+
+    private getRunLockFile(): string {
+        return path.join(this.getProjectRoot(), 'reports', 'run.lock')
+    }
+
+    private isPidAlive(pid: number): boolean {
+        try {
+            process.kill(pid, 0)
+            return true
+        } catch (error) {
+            return (error as NodeJS.ErrnoException)?.code === 'EPERM'
+        }
+    }
+
+    private readRunLockPid(filePath: string): number | null {
+        try {
+            const content = fs.readFileSync(filePath, 'utf8')
+            const parsed = JSON.parse(content)
+            const pid = Number(parsed?.pid)
+            return Number.isInteger(pid) && pid > 0 ? pid : null
+        } catch {
+            return null
+        }
+    }
+
+    public async acquireRunLock(): Promise<boolean> {
+        if (!cluster.isPrimary) {
+            return true
+        }
+
+        const filePath = this.getRunLockFile()
+        await fs.promises.mkdir(path.dirname(filePath), { recursive: true })
+
+        for (let attempt = 0; attempt < 2; attempt++) {
+            try {
+                const handle = await fs.promises.open(filePath, 'wx')
+                await handle.writeFile(
+                    JSON.stringify({
+                        pid: process.pid,
+                        startedAt: new Date().toISOString(),
+                        projectRoot: this.getProjectRoot()
+                    }) + '\n',
+                    'utf8'
+                )
+                await handle.close()
+
+                this.runLockFile = filePath
+                this.runLockAcquired = true
+                this.runLockExitHandler = () => this.releaseRunLock()
+                process.once('exit', this.runLockExitHandler)
+                return true
+            } catch (error) {
+                if ((error as NodeJS.ErrnoException)?.code !== 'EEXIST') {
+                    throw error
+                }
+
+                const existingPid = this.readRunLockPid(filePath)
+                if (existingPid && this.isPidAlive(existingPid)) {
+                    this.logger.warn(
+                        'main',
+                        'RUN-LOCK',
+                        `已有脚本实例正在运行 | pid=${existingPid} | lock=${filePath}`
+                    )
+                    return false
+                }
+
+                this.logger.warn('main', 'RUN-LOCK', `清理陈旧运行锁 | lock=${filePath}`)
+                await fs.promises.unlink(filePath).catch(() => undefined)
+            }
+        }
+
+        return false
+    }
+
+    public releaseRunLock(): void {
+        if (!this.runLockAcquired || !this.runLockFile) {
+            return
+        }
+
+        try {
+            const existingPid = this.readRunLockPid(this.runLockFile)
+            if (existingPid === process.pid) {
+                fs.unlinkSync(this.runLockFile)
+            }
+        } catch {}
+
+        this.runLockAcquired = false
+        if (this.runLockExitHandler) {
+            process.removeListener('exit', this.runLockExitHandler)
+            this.runLockExitHandler = null
+        }
     }
 
     private normalizePointValue(value: unknown, fallback = 0): number {
@@ -647,64 +743,74 @@ export class MicrosoftRewardsBot {
 
     // 运行主要的积分收集流程
     async run(): Promise<void> {
-        const skipped = []
-        await this.recoverInterruptedEarningsReport()
-        if (cluster.isPrimary) {
-            const selected = selectRunnableAccounts({
-                projectRoot: this.getProjectRoot(),
-                accounts: this.accounts,
-                config: this.config
-            })
-            this.accounts = selected.runnable
-            skipped.push(...selected.skipped)
-        }
-        const totalAccounts = this.accounts.length
-        const runStartTime = Date.now()
-        this.beginEarningsRun(runStartTime)
-
-        for (const item of skipped) {
-            this.logger.warn('main', 'ACCOUNT-SKIP', `${item.email} 已跳过 | reason=${item.reason} | ${item.detail}`)
-        }
-
-        this.logger.info(
-            'main',
-            'RUN-START',
-            `启动微软奖励脚本 | v${pkg.version} | 账户数: ${totalAccounts} | 已跳过: ${skipped.length} | 集群数: ${this.config.clusters}`
-        )
-
-        if (totalAccounts === 0) {
-            this.logger.warn('main', 'RUN-SKIP', '没有可运行账号，任务结束')
+        const lockAcquired = await this.acquireRunLock()
+        if (!lockAcquired) {
             await flushAllWebhooks()
             return
         }
 
-        // 风控告警：clusters>1 的场景下，如果多个账号共享同一出口 IP（都没配 proxy），
-        // 微软会很容易把它们识别为同源批量作业。启动时一次性提醒。
-        if (this.config.clusters > 1) {
-            const accountsWithoutProxy = this.accounts.filter(a => !a?.proxy?.url)
-            if (accountsWithoutProxy.length >= 2) {
-                this.logger.warn(
-                    'main',
-                    'IP-SHARING',
-                    `⚠️ ${accountsWithoutProxy.length} 个账号共享同一出口 IP（未配置代理）：${accountsWithoutProxy
-                        .map(a => a.email)
-                        .join(', ')}。强烈建议为每个账号配置独立代理，否则会被风控为批量作业。`
-                )
-            }
-        }
-
-        // 如果集群数大于1，则使用多进程模式
-        if (this.config.clusters > 1) {
+        try {
+            const skipped = []
+            await this.recoverInterruptedEarningsReport()
             if (cluster.isPrimary) {
-                // 主进程逻辑
-                await this.runMaster(runStartTime)
-            } else {
-                // 工作进程逻辑
-                this.runWorker(runStartTime)
+                const selected = selectRunnableAccounts({
+                    projectRoot: this.getProjectRoot(),
+                    accounts: this.accounts,
+                    config: this.config
+                })
+                this.accounts = selected.runnable
+                skipped.push(...selected.skipped)
             }
-        } else {
-            // 单进程模式，直接运行任务
-            await this.runTasks(this.accounts, runStartTime)
+            const totalAccounts = this.accounts.length
+            const runStartTime = Date.now()
+            this.beginEarningsRun(runStartTime)
+
+            for (const item of skipped) {
+                this.logger.warn('main', 'ACCOUNT-SKIP', `${item.email} 已跳过 | reason=${item.reason} | ${item.detail}`)
+            }
+
+            this.logger.info(
+                'main',
+                'RUN-START',
+                `启动微软奖励脚本 | v${pkg.version} | 账户数: ${totalAccounts} | 已跳过: ${skipped.length} | 集群数: ${this.config.clusters}`
+            )
+
+            if (totalAccounts === 0) {
+                this.logger.warn('main', 'RUN-SKIP', '没有可运行账号，任务结束')
+                await flushAllWebhooks()
+                return
+            }
+
+            // 风控告警：clusters>1 的场景下，如果多个账号共享同一出口 IP（都没配 proxy），
+            // 微软会很容易把它们识别为同源批量作业。启动时一次性提醒。
+            if (this.config.clusters > 1) {
+                const accountsWithoutProxy = this.accounts.filter(a => !a?.proxy?.url)
+                if (accountsWithoutProxy.length >= 2) {
+                    this.logger.warn(
+                        'main',
+                        'IP-SHARING',
+                        `⚠️ ${accountsWithoutProxy.length} 个账号共享同一出口 IP（未配置代理）：${accountsWithoutProxy
+                            .map(a => a.email)
+                            .join(', ')}。强烈建议为每个账号配置独立代理，否则会被风控为批量作业。`
+                    )
+                }
+            }
+
+            // 如果集群数大于1，则使用多进程模式
+            if (this.config.clusters > 1) {
+                if (cluster.isPrimary) {
+                    // 主进程逻辑
+                    await this.runMaster(runStartTime)
+                } else {
+                    // 工作进程逻辑
+                    this.runWorker(runStartTime)
+                }
+            } else {
+                // 单进程模式，直接运行任务
+                await this.runTasks(this.accounts, runStartTime)
+            }
+        } finally {
+            this.releaseRunLock()
         }
     }
 

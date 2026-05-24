@@ -94,6 +94,37 @@ test('selectRunnableAccounts auto-skips recent risk-control accounts during cool
     assert.equal(result.skipped[0].reason, 'risk-cooldown')
 })
 
+test('selectRunnableAccounts keeps legacy configs runnable when auto-skip is absent', async () => {
+    const { selectRunnableAccounts } = await loadPolicy()
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mrs-account-policy-'))
+
+    for (let i = 0; i < 3; i++) {
+        await appendEarningsRun(projectRoot, {
+            runStartedAt: `2026-04-24T0${i}:00:00.000Z`,
+            runFinishedAt: `2026-04-24T0${i}:04:00.000Z`,
+            accountStats: [
+                {
+                    email: 'legacy@example.com',
+                    collectedPoints: 0,
+                    duration: 10,
+                    success: false,
+                    error: '流程失败'
+                }
+            ]
+        })
+    }
+
+    const result = selectRunnableAccounts({
+        projectRoot,
+        accounts: [account('legacy@example.com')],
+        config: {},
+        now: '2026-04-24T12:00:00.000Z'
+    })
+
+    assert.deepEqual(result.runnable.map(item => item.email), ['legacy@example.com'])
+    assert.deepEqual(result.skipped, [])
+})
+
 test('selectRunnableAccounts respects disabled auto-skip config', async () => {
     const { selectRunnableAccounts } = await loadPolicy()
     const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mrs-account-policy-'))

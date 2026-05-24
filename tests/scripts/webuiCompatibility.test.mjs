@@ -93,3 +93,47 @@ test('getStatus reports docker runtime capabilities and external run state', asy
         else process.env.WEBUI_ENABLED = originalEnv.WEBUI_ENABLED
     }
 })
+
+test('getStatus reports local run lock as an external run', async () => {
+    const projectRoot = await makeProjectRoot()
+    await fs.mkdir(path.join(projectRoot, 'config'), { recursive: true })
+    await fs.mkdir(path.join(projectRoot, 'reports'), { recursive: true })
+    await fs.writeFile(path.join(projectRoot, 'config', 'config.json'), JSON.stringify(minimalConfig('local-config')))
+    await fs.writeFile(path.join(projectRoot, 'config', 'accounts.json'), JSON.stringify([{ email: 'local@example.com' }]))
+    await fs.writeFile(
+        path.join(projectRoot, 'reports', 'run.lock'),
+        JSON.stringify({ pid: process.pid, startedAt: '2026-04-24T01:00:00.000Z' }) + '\n'
+    )
+
+    const status = getStatus(projectRoot, { snapshot() { return [] } }, {
+        env: { MRS_RUNTIME_MODE: 'local' },
+        externalRunOptions: {
+            signalCheck(pid) {
+                return pid === process.pid
+            }
+        }
+    })
+
+    assert.equal(status.externalRun?.active, true)
+    assert.equal(status.externalRun?.source, 'local-run-lock')
+    assert.equal(status.externalRun?.pid, process.pid)
+})
+
+test('webui config defaults account auto-skip to opt-in', async () => {
+    const appJs = await fs.readFile(path.join(process.cwd(), 'scripts', 'webui', 'public', 'app.js'), 'utf8')
+    const exampleConfig = JSON.parse(await fs.readFile(path.join(process.cwd(), 'src', 'config.example.json'), 'utf8'))
+
+    assert.match(appJs, /cfg\.accountHealth\?\.autoSkip\?\.enabled \?\? false/)
+    assert.equal(exampleConfig.accountHealth?.autoSkip?.enabled, false)
+})
+
+test('webui keeps rebuild out of daily run and config controls', async () => {
+    const html = await fs.readFile(path.join(process.cwd(), 'scripts', 'webui', 'public', 'index.html'), 'utf8')
+    const appJs = await fs.readFile(path.join(process.cwd(), 'scripts', 'webui', 'public', 'app.js'), 'utf8')
+
+    assert.doesNotMatch(html, /id="btn-run-build"/)
+    assert.doesNotMatch(html, /id="btn-build-from-config"/)
+    assert.doesNotMatch(appJs, /document\.getElementById\('btn-run-build'\)/)
+    assert.doesNotMatch(appJs, /btn-build-from-config/)
+    assert.match(appJs, /'build': '编译 TypeScript 到 dist\/，只有代码改动后才需要跑。'/)
+})

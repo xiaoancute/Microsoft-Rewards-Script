@@ -109,6 +109,30 @@ test('buildPreflightReport reports missing runtime files and active Docker lock'
     assert.equal(report.checks.find(item => item.id === 'proxy-spread')?.status, 'warn')
 })
 
+test('buildPreflightReport labels active local run lock as local script', async () => {
+    const projectRoot = await makeProjectRoot()
+    await fs.mkdir(path.join(projectRoot, 'dist'), { recursive: true })
+    await fs.mkdir(path.join(projectRoot, 'logs'), { recursive: true })
+    await fs.mkdir(path.join(projectRoot, 'reports'), { recursive: true })
+    await fs.writeFile(path.join(projectRoot, 'dist', 'index.js'), '// built')
+    await writeJson(path.join(projectRoot, 'config', 'config.json'), config())
+    await writeJson(path.join(projectRoot, 'config', 'accounts.json'), [account('local-lock@example.com')])
+    await writeJson(path.join(projectRoot, 'sessions', 'local-lock@example.com', 'session_mobile.json'), [
+        { name: 'MUID' }
+    ])
+
+    const report = buildPreflightReport(projectRoot, {
+        runtime: { isDocker: false, mode: 'local' },
+        capabilities: { canOpenBrowserSession: true },
+        externalRun: { active: true, source: 'local-run-lock', pid: 456 }
+    })
+
+    const lockCheck = report.checks.find(item => item.id === 'external-run')
+    assert.equal(lockCheck?.status, 'fail')
+    assert.match(lockCheck?.detail || '', /本地脚本/)
+    assert.doesNotMatch(lockCheck?.detail || '', /容器任务/)
+})
+
 test('buildPreflightReport blocks when account policy leaves no runnable accounts', async () => {
     const projectRoot = await makeProjectRoot()
     await fs.mkdir(path.join(projectRoot, 'dist'), { recursive: true })

@@ -216,6 +216,32 @@ test('runTasks exits single-process mode with code 1 when any account fails', as
     assert.deepEqual(exitCalls, [1])
 })
 
+test('MicrosoftRewardsBot run lock prevents concurrent local runs', async () => {
+    const mod = await loadBotModule()
+    const { MicrosoftRewardsBot } = mod
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mrs-run-lock-'))
+
+    const first = Object.create(MicrosoftRewardsBot.prototype)
+    first.projectRoot = projectRoot
+    first.logger = { info() {}, warn() {}, error() {}, debug() {}, alert() {} }
+
+    const second = Object.create(MicrosoftRewardsBot.prototype)
+    second.projectRoot = projectRoot
+    second.logger = { info() {}, warn() {}, error() {}, debug() {}, alert() {} }
+
+    const third = Object.create(MicrosoftRewardsBot.prototype)
+    third.projectRoot = projectRoot
+    third.logger = { info() {}, warn() {}, error() {}, debug() {}, alert() {} }
+
+    assert.equal(await first.acquireRunLock(), true)
+    assert.equal(await second.acquireRunLock(), false)
+
+    first.releaseRunLock()
+
+    assert.equal(await third.acquireRunLock(), true)
+    third.releaseRunLock()
+})
+
 test('flushPartialEarningsReport writes completed stats once during interrupted shutdown', async () => {
     const mod = await loadBotModule()
     const { MicrosoftRewardsBot } = mod

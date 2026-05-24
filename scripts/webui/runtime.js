@@ -1,4 +1,5 @@
 import fs from 'fs'
+import path from 'path'
 import { resolveDockerLockFile } from '../docker/runtime-maintenance.js'
 
 function envFlag(value, defaultValue = false) {
@@ -35,43 +36,62 @@ export function buildCapabilities(runtime, { platform = process.platform } = {})
 export function readExternalRunStatus(
     runtime = detectRuntime(),
     {
-        lockFile = resolveDockerLockFile(process.env),
+        projectRoot = null,
+        lockFile = null,
         existsSync = fs.existsSync,
         readFileSync = fs.readFileSync,
         signalCheck = pid => {
             try {
                 process.kill(pid, 0)
                 return true
-            } catch {
-                return false
+            } catch (error) {
+                return error?.code === 'EPERM'
             }
         }
     } = {}
 ) {
-    if (!runtime?.isDocker) {
-        return { active: false, source: null, pid: null }
+    const source = runtime?.isDocker ? 'docker-lockfile' : 'local-run-lock'
+    const targetLockFile = lockFile || (runtime?.isDocker
+        ? resolveDockerLockFile(process.env)
+        : projectRoot
+            ? path.join(projectRoot, 'reports', 'run.lock')
+            : null)
+
+    if (!targetLockFile || !existsSync(targetLockFile)) {
+        return { active: false, source, pid: null }
     }
 
-    if (!existsSync(lockFile)) {
-        return { active: false, source: 'docker-lockfile', pid: null }
-    }
-
-    let pidText = ''
+    let raw = ''
     try {
-        pidText = String(readFileSync(lockFile, 'utf8') || '').trim()
+        raw = String(readFileSync(targetLockFile, 'utf8') || '').trim()
     } catch {
-        return { active: false, source: 'docker-lockfile', pid: null }
+        return { active: false, source, pid: null }
     }
 
-    if (!/^\d+$/.test(pidText)) {
-        return { active: false, source: 'docker-lockfile', pid: null }
+    const pid = parseLockPid(raw)
+    if (!pid) {
+        return { active: false, source, pid: null }
     }
 
-    const pid = Number(pidText)
     return {
         active: signalCheck(pid),
-        source: 'docker-lockfile',
+        source,
         pid
+    }
+}
+
+function parseLockPid(raw) {
+    if (/^\d+$/.test(raw)) {
+        const pid = Number(raw)
+        return Number.isInteger(pid) && pid > 0 ? pid : null
+    }
+
+    try {
+        const parsed = JSON.parse(raw)
+        const pid = Number(parsed?.pid)
+        return Number.isInteger(pid) && pid > 0 ? pid : null
+    } catch {
+        return null
     }
 }
 

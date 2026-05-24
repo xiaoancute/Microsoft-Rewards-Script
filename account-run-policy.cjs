@@ -58,7 +58,7 @@ function selectRunnableAccounts({ projectRoot, accounts, config, now = Date.now(
 
 function normalizeAutoSkipConfig(config = {}) {
     return {
-        enabled: config.enabled !== false,
+        enabled: config.enabled === true,
         riskCooldownHours: positiveNumber(config.riskCooldownHours, 24),
         maxConsecutiveFailures: positiveNumber(config.maxConsecutiveFailures, 3)
     }
