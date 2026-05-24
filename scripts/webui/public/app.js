@@ -1,6 +1,8 @@
 // Frontend app — vanilla JS ESM, no bundler
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { chooseDefaultJobId, formatJobOptionLabel } from './job-ui.js'
+
 const TOKEN_KEY = 'webui_token'
 const THEME_KEY = 'webui_theme'
 
@@ -139,7 +141,7 @@ function switchTab(name) {
     if (name === 'reports') loadReports()
     if (name === 'sessions') loadSessions()
     if (name === 'config') loadConfig()
-    if (name === 'logs') loadJobs()
+    if (name === 'logs') loadJobs({ autoSelect: true })
     if (name === 'env') loadEnv()
     if (name === 'schedule') loadSchedule()
     if (name === 'loghistory') loadLogHistory()
@@ -887,7 +889,7 @@ document.getElementById('btn-reload-config').addEventListener('click', loadConfi
 // Jobs & logs
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function loadJobs() {
+async function loadJobs(options = {}) {
     try {
         const [{ jobs }, status] = await Promise.all([
             api('/api/jobs'),
@@ -895,25 +897,31 @@ async function loadJobs() {
         ])
         state.jobs = jobs
         if (status) state.status = status
-        renderJobFilter()
+        const selectedJobId = renderJobFilter({ autoSelect: Boolean(options.autoSelect) })
         updateRunButtons()
+        if (options.autoSelect && selectedJobId) {
+            subscribeLogs(Number(selectedJobId))
+        }
     } catch (err) {
         toast(`加载任务失败: ${err.message}`, 'err')
     }
 }
 
-function renderJobFilter() {
+function renderJobFilter(options = {}) {
     const sel = document.getElementById('job-filter')
     const cur = sel.value
-    sel.innerHTML = '<option value="">所有任务</option>'
+    sel.innerHTML = '<option value="">全部实时日志</option>'
     state.jobs.forEach(j => {
         const o = document.createElement('option')
         o.value = String(j.id)
-        const status = j.running ? '🟢 运行中' : j.exitCode === 0 ? '✔ 完成' : '✖ 退出'
-        o.textContent = `#${j.id} ${j.label} · ${status}`
+        o.textContent = formatJobOptionLabel(j)
         sel.appendChild(o)
     })
-    if (cur && state.jobs.some(j => String(j.id) === cur)) sel.value = cur
+    const nextValue = options.autoSelect ? chooseDefaultJobId(state.jobs, cur) : cur
+    if (nextValue && state.jobs.some(j => String(j.id) === String(nextValue))) {
+        sel.value = String(nextValue)
+    }
+    return sel.value
 }
 
 function updateRunButtons() {
