@@ -15,7 +15,9 @@ const {
     writeEarningsCheckpoint,
     recoverEarningsCheckpoint,
     appendFailureSnapshot,
-    readFailureSnapshots
+    readFailureSnapshots,
+    taskDiscoveryFile,
+    appendTaskDiscoverySamples
 } = require('../../earnings-report.cjs')
 
 async function makeProjectRoot() {
@@ -78,6 +80,53 @@ test('appendEarningsRun writes a structured JSONL run record', async () => {
     assert.equal(JSON.parse(lines[0]).accounts[1].error, '流程失败')
     assert.equal(JSON.parse(lines[0]).accounts[0].taskStats[0].key, 'daily-set')
     assert.equal(JSON.parse(lines[0]).accounts[0].taskStats[1].collectedPoints, 20)
+})
+
+test('appendTaskDiscoverySamples writes only unknown task samples', async () => {
+    const projectRoot = await makeProjectRoot()
+
+    const records = await appendTaskDiscoverySamples(projectRoot, {
+        account: 'unknown@example.com',
+        geoLocale: 'us',
+        capturedAt: '2026-06-28T01:00:00.000Z',
+        tasks: [
+            {
+                source: 'dashboard',
+                kind: 'more-promotion',
+                title: 'Mystery, "quoted"',
+                offerId: 'offer-1',
+                points: 0,
+                decision: 'unknown',
+                reason: 'unsupported-promotion-type'
+            },
+            {
+                source: 'dashboard',
+                kind: 'daily-set',
+                title: 'Known',
+                offerId: 'offer-2',
+                points: 10,
+                decision: 'auto',
+                reason: 'auto-executable'
+            }
+        ]
+    })
+
+    const lines = (await fs.readFile(taskDiscoveryFile(projectRoot), 'utf8')).trim().split('\n')
+
+    assert.equal(records.length, 1)
+    assert.equal(lines.length, 1)
+    assert.deepEqual(JSON.parse(lines[0]), {
+        schemaVersion: 1,
+        account: 'unknown@example.com',
+        geoLocale: 'us',
+        source: 'dashboard',
+        kind: 'more-promotion',
+        title: 'Mystery, "quoted"',
+        offerId: 'offer-1',
+        points: 0,
+        reason: 'unsupported-promotion-type',
+        capturedAt: '2026-06-28T01:00:00.000Z'
+    })
 })
 
 test('readEarningsReport aggregates task-level earning summaries', async () => {

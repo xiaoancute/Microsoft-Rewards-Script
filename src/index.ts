@@ -44,6 +44,7 @@ const PROJECT_ROOT = path.resolve(__dirname, '..')
 const {
     appendEarningsRun,
     appendFailureSnapshot,
+    appendTaskDiscoverySamples,
     writeEarningsCheckpoint,
     clearEarningsCheckpoint,
     recoverEarningsCheckpoint
@@ -59,6 +60,15 @@ const {
             riskControlStopped?: boolean
         }
     ) => Promise<unknown>
+    appendTaskDiscoverySamples: (
+        projectRoot: string,
+        input: {
+            account: string
+            geoLocale?: string
+            tasks?: unknown[]
+            capturedAt?: number
+        }
+    ) => Promise<unknown[]>
     appendFailureSnapshot: (
         projectRoot: string,
         input: {
@@ -1190,8 +1200,33 @@ export class MicrosoftRewardsBot {
                     'POINTS',
                     `今日可赚取 | 总计: ${this.pointsCanCollect} | 浏览器: ${
                         browserEarnable.totalEarnablePoints
-                    } | 应用: ${appEarnable?.totalEarnablePoints ?? 0} | ${accountEmail} | 区域设置: ${this.userData.geoLocale}`
+                    } | 应用: ${appEarnable?.totalEarnablePoints ?? 0} | 任务: ${
+                        browserEarnable.taskCount ?? 0
+                    } | 未知: ${browserEarnable.unknownTaskCount ?? 0} | ${accountEmail} | 区域设置: ${
+                        this.userData.geoLocale
+                    }`
                 )
+                if ((browserEarnable.unknownTaskCount ?? 0) > 0) {
+                    try {
+                        await appendTaskDiscoverySamples(this.getProjectRoot(), {
+                            account: accountEmail,
+                            geoLocale: this.userData.geoLocale,
+                            tasks: browserEarnable.tasks,
+                            capturedAt: Date.now()
+                        })
+                        this.logger.warn(
+                            'main',
+                            'TASK-DISCOVERY',
+                            `发现未知赚分任务 ${browserEarnable.unknownTaskCount} 个，已记录到 reports/task-discovery.jsonl | ${accountEmail}`
+                        )
+                    } catch (error) {
+                        this.logger.warn(
+                            'main',
+                            'TASK-DISCOVERY',
+                            `未知任务样本写入失败: ${error instanceof Error ? error.message : String(error)}`
+                        )
+                    }
+                }
 
                 if (this.config.workers.doAppPromotions) {
                     await this.trackTask('app-promotions', 'App 活动', () => this.workers.doAppPromotions(appData))

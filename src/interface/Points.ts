@@ -1,3 +1,5 @@
+import type { BrowserTask } from '../functions/taskDiscovery/browserTasks'
+
 export interface BrowserEarnablePoints {
     desktopSearchPoints: number
     mobileSearchPoints: number
@@ -7,6 +9,9 @@ export interface BrowserEarnablePoints {
     specialPromotionsPoints: number
     modernPanelPoints: number
     totalEarnablePoints: number
+    tasks?: BrowserTask[]
+    taskCount?: number
+    unknownTaskCount?: number
 }
 
 export interface AppEarnablePoints {

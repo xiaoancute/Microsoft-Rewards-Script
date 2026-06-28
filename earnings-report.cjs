@@ -5,6 +5,7 @@ const REPORT_DIR = 'reports'
 const EARNINGS_FILE = 'earnings.jsonl'
 const EARNINGS_CHECKPOINT_FILE = 'earnings.pending.json'
 const FAILURE_SNAPSHOTS_FILE = 'failure-snapshots.jsonl'
+const TASK_DISCOVERY_FILE = 'task-discovery.jsonl'
 const DAY_MS = 24 * 60 * 60 * 1000
 const FAILURE_BUCKET_ORDER = ['risk_control', 'login', 'session', 'network', 'flow', 'unknown']
 const FAILURE_BUCKET_LABELS = {
@@ -41,6 +42,10 @@ function earningsCheckpointFile(projectRoot) {
 
 function failureSnapshotsFile(projectRoot) {
     return path.join(reportsDir(projectRoot), FAILURE_SNAPSHOTS_FILE)
+}
+
+function taskDiscoveryFile(projectRoot) {
+    return path.join(reportsDir(projectRoot), TASK_DISCOVERY_FILE)
 }
 
 function toIso(value) {
@@ -128,6 +133,30 @@ async function appendFailureSnapshot(projectRoot, input) {
     await fs.promises.mkdir(reportsDir(projectRoot), { recursive: true })
     await fs.promises.appendFile(failureSnapshotsFile(projectRoot), `${JSON.stringify(snapshot)}\n`, 'utf8')
     return snapshot
+}
+
+async function appendTaskDiscoverySamples(projectRoot, input) {
+    const capturedAt = toIso(input?.capturedAt || Date.now())
+    const records = (Array.isArray(input?.tasks) ? input.tasks : [])
+        .filter(task => task?.decision === 'unknown')
+        .map(task => ({
+            schemaVersion: 1,
+            account: String(input?.account || 'unknown'),
+            geoLocale: input?.geoLocale ? String(input.geoLocale) : undefined,
+            source: String(task.source || 'unknown'),
+            kind: String(task.kind || 'unknown'),
+            title: redactSensitiveText(task.title || ''),
+            offerId: task.offerId ? String(task.offerId) : null,
+            points: Number(task.points) || 0,
+            reason: String(task.reason || 'unknown'),
+            capturedAt
+        }))
+
+    if (records.length === 0) return []
+
+    await fs.promises.mkdir(reportsDir(projectRoot), { recursive: true })
+    await fs.promises.appendFile(taskDiscoveryFile(projectRoot), `${records.map(record => JSON.stringify(record)).join('\n')}\n`, 'utf8')
+    return records
 }
 
 function readFailureSnapshots(projectRoot, { account = 'all', limit = 50 } = {}) {
@@ -688,9 +717,11 @@ module.exports = {
     earningsFile,
     earningsCheckpointFile,
     failureSnapshotsFile,
+    taskDiscoveryFile,
     buildRunRecord,
     appendEarningsRun,
     appendFailureSnapshot,
+    appendTaskDiscoverySamples,
     readFailureSnapshots,
     writeEarningsCheckpoint,
     readEarningsCheckpoint,

@@ -11,8 +11,7 @@ import type { AppEarnablePoints, BrowserEarnablePoints, MissingSearchPoints } fr
 import type { AppDashboardData } from '../interface/AppDashBoardData'
 import { PanelFlyoutData } from '../interface/PanelFlyoutData'
 import { adaptModernDashboardData } from './modernDashboardAdapter'
-import { collectModernPanelOpportunities } from '../functions/modernPanel/collectModernPanelOpportunities'
-import { ModernOpportunityDecision, ModernOpportunityKind } from '../functions/modernPanel/types'
+import { discoverBrowserTasks, summarizeBrowserTasks } from '../functions/taskDiscovery/browserTasks'
 
 export default class BrowserFunc {
     private bot: MicrosoftRewardsBot
@@ -236,103 +235,17 @@ export default class BrowserFunc {
     async getBrowserEarnablePoints(): Promise<BrowserEarnablePoints> {
         try {
             const data = await this.getDashboardData()
-
-            const desktopSearchPoints =
-                data.userStatus.counters.pcSearch?.reduce(
-                    (sum, x) => sum + (x.pointProgressMax - x.pointProgress),
-                    0
-                ) ?? 0
-
-            const mobileSearchPoints =
-                data.userStatus.counters.mobileSearch?.reduce(
-                    (sum, x) => sum + (x.pointProgressMax - x.pointProgress),
-                    0
-                ) ?? 0
-
-            const todayDate = this.bot.utils.getFormattedDate()
-            const dailySetPoints =
-                data.dailySetPromotions[todayDate]?.reduce(
-                    (sum, x) => sum + (x.pointProgressMax - x.pointProgress),
-                    0
-                ) ?? 0
-
-            const morePromotionsPoints =
-                [...(data.morePromotions ?? []), ...(data.morePromotionsWithoutPromotionalItems ?? [])].reduce((sum, x) => {
-                    if (
-                        ['quiz', 'urlreward'].includes(x.promotionType) &&
-                        x.exclusiveLockedFeatureStatus !== 'locked'
-                    ) {
-                        return sum + (x.pointProgressMax - x.pointProgress)
-                    }
-                    return sum
-                }, 0) ?? 0
-
-            const punchCardPoints =
-                data.punchCards?.reduce((sum, punchCard) => {
-                    if (punchCard.parentPromotion?.complete || (punchCard.parentPromotion?.pointProgressMax ?? 0) <= 0) {
-                        return sum
-                    }
-
-                    return (
-                        sum +
-                        (punchCard.childPromotions?.reduce((childSum, promotion) => {
-                            if (promotion.complete) return childSum
-                            if (promotion.exclusiveLockedFeatureStatus === 'locked') return childSum
-                            if (!promotion.promotionType) return childSum
-                            if (promotion.attributes.is_unlocked) return childSum
-
-                            return childSum + Math.max(0, promotion.pointProgressMax - promotion.pointProgress)
-                        }, 0) ?? 0)
-                    )
-                }, 0) ?? 0
-
-            const specialPromotionsPoints =
-                data.promotionalItems?.reduce((sum, promotion) => {
-                    if (promotion.complete) return sum
-                    if (promotion.exclusiveLockedFeatureStatus === 'locked') return sum
-                    if (!promotion.promotionType) return sum
-
-                    const type = promotion.promotionType.toLowerCase()
-                    const name = promotion.name?.toLowerCase() ?? ''
-                    if (!['quiz', 'urlreward', 'findclippy'].includes(type)) return sum
-                    if (name.includes('ww_banner_optin_2x')) return sum
-
-                    return sum + Math.max(0, promotion.pointProgressMax - promotion.pointProgress)
-                }, 0) ?? 0
-
-            const modernPanelPoints =
-                this.bot.rewardsVersion === 'modern' && this.bot.panelData
-                    ? collectModernPanelOpportunities(this.bot.panelData, data).reduce((sum, opportunity) => {
-                          if (opportunity.decision !== ModernOpportunityDecision.Auto) return sum
-                          if (opportunity.kind === ModernOpportunityKind.CheckIn) return sum
-
-                          const promotion = opportunity.promotion as { pointProgressMax?: number; pointProgress?: number } | null
-                          if (!promotion) return sum
-
-                          const pointProgressMax = Number(promotion.pointProgressMax ?? 0)
-                          const pointProgress = Number(promotion.pointProgress ?? 0)
-                          return sum + Math.max(0, pointProgressMax - pointProgress)
-                      }, 0)
-                    : 0
-
-            const totalEarnablePoints =
-                desktopSearchPoints +
-                mobileSearchPoints +
-                dailySetPoints +
-                morePromotionsPoints +
-                punchCardPoints +
-                specialPromotionsPoints +
-                modernPanelPoints
+            const tasks = discoverBrowserTasks({
+                dashboard: data,
+                panelData: this.bot.rewardsVersion === 'modern' ? this.bot.panelData : null,
+                todayDate: this.bot.utils.getFormattedDate()
+            })
+            const summary = summarizeBrowserTasks(tasks)
 
             return {
-                dailySetPoints,
-                morePromotionsPoints,
-                desktopSearchPoints,
-                mobileSearchPoints,
-                punchCardPoints,
-                specialPromotionsPoints,
-                modernPanelPoints,
-                totalEarnablePoints
+                ...summary,
+                tasks,
+                unknownTaskCount: summary.unknownCount
             }
         } catch (error) {
             this.bot.logger.error(
