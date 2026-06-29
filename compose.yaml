@@ -1,6 +1,6 @@
 services:
     microsoft-rewards-script:
-        build:
+build:
             context: .
         image: microsoft-rewards-script:local
         container_name: microsoft-rewards-script
