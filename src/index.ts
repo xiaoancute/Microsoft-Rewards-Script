@@ -1232,7 +1232,15 @@ export class MicrosoftRewardsBot {
                 }
 
                 if (this.config.ensureStreakProtection) {
-                    await this.browser.func.ensureStreakProtection()
+                    try {
+                        await this.browser.func.ensureStreakProtection()
+                    } catch (error) {
+                        this.logger.warn(
+                            this.isMobile,
+                            'ENABLE-STREAK-PROTECTION',
+                            `连续天数保护开启失败，继续流程 | ${error instanceof Error ? error.message : String(error)}`
+                        )
+                    }
                 }
                 if (this.config.workers.doClaimBonusPoints) {
                     await this.trackTask('claim-bonus-points', '领取积分横幅', () =>

@@ -358,11 +358,11 @@ export default class BrowserFunc {
 
     async ensureStreakProtection() {
         try {
-            if (!this.bot.requestToken && this.bot.rewardsVersion === 'legacy') {
+            if (!this.bot.requestToken) {
                 this.bot.logger.warn(
                     this.bot.isMobile,
                     'ENABLE-STREAK-PROTECTION',
-                    'Skipping: Request token not available, this action requires it!'
+                    '跳过: 请求令牌不可用（现代仪表板或会话问题），此操作需要它！'
                 )
                 return
             }
