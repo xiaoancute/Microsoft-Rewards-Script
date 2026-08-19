@@ -1,9 +1,8 @@
+import { REWARDS_BASE_URL } from '../constants/urls'
 import { type Page, type BrowserContext } from 'patchright'
-import { CheerioAPI, load } from 'cheerio'
 import { ClickOptions, createCursor } from 'ghost-cursor-playwright-port'
 
 import type { MicrosoftRewardsBot } from '../index'
-import { detectRiskControlPrompt, RiskControlDetectedError } from './RiskControlDetector'
 
 export default class BrowserUtils {
     private bot: MicrosoftRewardsBot
@@ -54,7 +53,7 @@ export default class BrowserUtils {
                                 this.bot.logger.debug(
                                     this.bot.isMobile,
                                     'DISMISS-ALL-MESSAGES',
-                                    `已关闭: ${b.label}`
+                                    `Dismissed: ${b.label}`
                                 )
                             }
                         }
@@ -63,19 +62,19 @@ export default class BrowserUtils {
                 await this.bot.utils.wait(300)
             }
 
-            // 覆盖层
+            // Overlay
             const overlay = await page.$('#bnp_overlay_wrapper')
             if (overlay) {
                 const rejected = await this.ghostClick(page, '#bnp_btn_reject, button[aria-label*="Reject" i]')
                 if (rejected) {
-                    this.bot.logger.debug(this.bot.isMobile, 'DISMISS-ALL-MESSAGES', '已关闭: Bing覆盖层拒绝')
+                    this.bot.logger.debug(this.bot.isMobile, 'DISMISS-ALL-MESSAGES', 'Dismissed: Bing Overlay Reject')
                 } else {
                     const accepted = await this.ghostClick(page, '#bnp_btn_accept')
                     if (accepted) {
                         this.bot.logger.debug(
                             this.bot.isMobile,
                             'DISMISS-ALL-MESSAGES',
-                            '已关闭: Bing覆盖层接受'
+                            'Dismissed: Bing Overlay Accept'
                         )
                     }
                 }
@@ -85,7 +84,7 @@ export default class BrowserUtils {
             this.bot.logger.warn(
                 this.bot.isMobile,
                 'DISMISS-ALL-MESSAGES',
-                `处理程序错误: ${error instanceof Error ? error.message : String(error)}`
+                `Handler error: ${error instanceof Error ? error.message : String(error)}`
             )
         }
     }
@@ -97,9 +96,7 @@ export default class BrowserUtils {
 
             const newTab = pages[pages.length - 1]
             if (!newTab) {
-                const message = '未找到标签页!'
-                this.bot.logger.error(this.bot.isMobile, 'GET-NEW-TAB', message)
-                throw new Error(message)
+                throw this.bot.logger.error(this.bot.isMobile, 'GET-NEW-TAB', 'No tabs could be found!')
             }
 
             return newTab
@@ -107,7 +104,7 @@ export default class BrowserUtils {
             this.bot.logger.error(
                 this.bot.isMobile,
                 'GET-NEW-TAB',
-                `无法获取最新标签页: ${error instanceof Error ? error.message : String(error)}`
+                `Unable to get latest tab: ${error instanceof Error ? error.message : String(error)}`
             )
             throw error
         }
@@ -116,10 +113,10 @@ export default class BrowserUtils {
     async reloadBadPage(page: Page): Promise<boolean> {
         try {
             const html = await page.content().catch(() => '')
-            const $ = load(html)
+            const isBadPage = /<body[^>]*\bclass=["'][^"']*\bneterror\b/i.test(html)
 
-            if ($('body.neterror').length) {
-                this.bot.logger.info(this.bot.isMobile, 'RELOAD-BAD-PAGE', '检测到坏页面，正在重新加载!')
+            if (isBadPage) {
+                this.bot.logger.info(this.bot.isMobile, 'RELOAD-BAD-PAGE', 'Bad page detected, reloading!')
                 try {
                     await page.reload({ waitUntil: 'load' })
                 } catch {
@@ -133,7 +130,7 @@ export default class BrowserUtils {
             this.bot.logger.error(
                 this.bot.isMobile,
                 'RELOAD-BAD-PAGE',
-                `重新加载检查失败: ${error instanceof Error ? error.message : String(error)}`
+                `Reload check failed: ${error instanceof Error ? error.message : String(error)}`
             )
             return true
         }
@@ -147,16 +144,16 @@ export default class BrowserUtils {
             this.bot.logger.debug(
                 this.bot.isMobile,
                 'SEARCH-CLOSE-TABS',
-                `发现 ${tabs.length} 个标签页打开 (最小: ${config.minTabs}, 最大: ${config.maxTabs})`
+                `Found ${tabs.length} tab(s) open (min: ${config.minTabs}, max: ${config.maxTabs})`
             )
 
-            // 检查是否有效
+            // Check if valid
             if (config.minTabs < 1 || config.maxTabs < config.minTabs) {
-                this.bot.logger.warn(this.bot.isMobile, 'SEARCH-CLOSE-TABS', '配置无效，使用默认值')
+                this.bot.logger.warn(this.bot.isMobile, 'SEARCH-CLOSE-TABS', 'Invalid config, using defaults')
                 config = { minTabs: 1, maxTabs: 1 }
             }
 
-            // 如果超过最大配置则关闭
+            // Close if more than max config
             if (tabs.length > config.maxTabs) {
                 const tabsToClose = tabs.slice(config.maxTabs)
 
@@ -166,28 +163,28 @@ export default class BrowserUtils {
                 this.bot.logger.debug(
                     this.bot.isMobile,
                     'SEARCH-CLOSE-TABS',
-                    `关闭了 ${closedCount}/${tabsToClose.length} 个多余的标签页以达到最大值 ${config.maxTabs}`
+                    `Closed ${closedCount}/${tabsToClose.length} excess tab(s) to reach max of ${config.maxTabs}`
                 )
 
-                // 打开更多标签页
+                // Open more tabs
             } else if (tabs.length < config.minTabs) {
                 const tabsNeeded = config.minTabs - tabs.length
                 this.bot.logger.debug(
                     this.bot.isMobile,
                     'SEARCH-CLOSE-TABS',
-                    `打开 ${tabsNeeded} 个标签页以达到最小值 ${config.minTabs}`
+                    `Opening ${tabsNeeded} tab(s) to reach min of ${config.minTabs}`
                 )
 
                 const newTabPromises = Array.from({ length: tabsNeeded }, async () => {
                     try {
                         const newPage = await browser.newPage()
-                        await newPage.goto(this.bot.config.baseURL, { waitUntil: 'domcontentloaded', timeout: 15000 })
+                        await newPage.goto(REWARDS_BASE_URL, { waitUntil: 'domcontentloaded', timeout: 15000 })
                         return newPage
                     } catch (error) {
                         this.bot.logger.warn(
                             this.bot.isMobile,
                             'SEARCH-CLOSE-TABS',
-                            `创建新标签页失败: ${error instanceof Error ? error.message : String(error)}`
+                            `Failed to create new tab: ${error instanceof Error ? error.message : String(error)}`
                         )
                         return null
                     }
@@ -202,35 +199,10 @@ export default class BrowserUtils {
             this.bot.logger.error(
                 this.bot.isMobile,
                 'SEARCH-CLOSE-TABS',
-                `错误: ${error instanceof Error ? error.message : String(error)}`
+                `Error: ${error instanceof Error ? error.message : String(error)}`
             )
             return page
         }
-    }
-
-    async loadInCheerio(data: Page | string): Promise<CheerioAPI> {
-        const html: string = typeof data === 'string' ? data : await data.content()
-        const $ = load(html)
-        return $
-    }
-
-    async assertNoRiskControlPrompt(page: Page, stage: string, accountEmail: string): Promise<void> {
-        if (this.bot.config.riskControlStop?.enabled === false) {
-            return
-        }
-
-        const detection = await detectRiskControlPrompt(page, { stage, accountEmail })
-        if (!detection) {
-            return
-        }
-
-        this.bot.logger.alert(
-            this.bot.isMobile,
-            'RISK-CONTROL-STOP',
-            `${detection.message} | selector=${detection.matchedSelector ?? 'none'} | text=${detection.matchedText ?? 'none'}`
-        )
-
-        throw new RiskControlDetectedError(detection)
     }
 
     async ghostClick(page: Page, selector: string, options?: ClickOptions): Promise<boolean> {
@@ -238,12 +210,14 @@ export default class BrowserUtils {
             this.bot.logger.debug(
                 this.bot.isMobile,
                 'GHOST-CLICK',
-                `尝试点击选择器: ${selector}, 选项: ${JSON.stringify(options)}`
+                `Trying to click selector: ${selector}, options: ${JSON.stringify(options)}`
             )
 
-            // 点击前等待选择器存在
+            // Wait for selector to exist before clicking
             await page.waitForSelector(selector, { timeout: 1000 }).catch(() => {})
 
+            // ghost-cursor expects its own Playwright Page type from a different
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const cursor = createCursor(page as any)
             await cursor.click(selector, options)
 
@@ -252,7 +226,7 @@ export default class BrowserUtils {
             this.bot.logger.warn(
                 this.bot.isMobile,
                 'GHOST-CLICK',
-                `${selector} 点击失败: ${error instanceof Error ? error.message : String(error)}`
+                `Failed for ${selector}: ${error instanceof Error ? error.message : String(error)}`
             )
             return false
         }
@@ -272,7 +246,7 @@ export default class BrowserUtils {
                 this.bot.logger.debug(
                     this.bot.isMobile,
                     'DISABLE-FIDO',
-                    `修改了请求体: isFidoSupported 设置为 ${body.isFidoSupported}`
+                    `Modified request body: isFidoSupported set to ${body.isFidoSupported}`
                 )
 
                 route.continue({
@@ -286,61 +260,10 @@ export default class BrowserUtils {
                 this.bot.logger.debug(
                     this.bot.isMobile,
                     'DISABLE-FIDO',
-                    `发生错误: ${error instanceof Error ? error.message : String(error)}`
+                    `An error occurred: ${error instanceof Error ? error.message : String(error)}`
                 )
                 route.continue()
             }
         })
-    }
-
-    /**
-     * 仿真人打字：每字符基础延迟走 gamma-like 分布（多数偏低、偶尔偏高），
-     * 低概率插入 150-400ms 的"思考停顿"，空格前后略慢（词边界）。
-     *
-     * 用这个代替 page.keyboard.type(text, { delay: 50 })。
-     * 50ms 匀速是典型 bot 指纹，真人的 keydown 间隔直方图有明显偏态和重尾。
-     *
-     * @param page     Playwright Page
-     * @param text     要输入的字符串
-     * @param opts.baseMean  每字符平均 delay (ms)，默认 80
-     * @param opts.thinkProb 字符间插入思考停顿的概率 (0-1)，默认 0.05
-     */
-    async humanType(
-        page: Page,
-        text: string,
-        opts: { baseMean?: number; thinkProb?: number } = {}
-    ): Promise<void> {
-        const baseMean = opts.baseMean ?? 80
-        const thinkProb = opts.thinkProb ?? 0.05
-        const utils = this.bot.utils
-
-        for (let i = 0; i < text.length; i++) {
-            const ch = text[i] as string
-            await page.keyboard.type(ch, { delay: 0 })
-
-            // 已经输入完最后一个字符就不再等待
-            if (i === text.length - 1) break
-
-            // gamma-like：两个 0-1 均匀相加后加权取最小值 —— 形状近似 k=2 的 gamma
-            // mean ≈ baseMean；最小约 0.3*baseMean，偶发 3-4x 长尾
-            const r1 = Math.random()
-            const r2 = Math.random()
-            const shape = (r1 + r2) * 0.5 // 趋近正态 mean=0.5
-            // 把 [0,1] 映射到非对称范围：mean*(0.3 + 1.4*shape)，p95 ≈ mean*1.7
-            let delay = Math.max(10, Math.floor(baseMean * (0.3 + 1.4 * shape)))
-
-            // 词边界（空格前后）稍慢，模拟真人节奏
-            const next = text[i + 1]
-            if (ch === ' ' || next === ' ') {
-                delay = Math.floor(delay * 1.5)
-            }
-
-            // 偶发思考停顿
-            if (Math.random() < thinkProb) {
-                delay += utils.randomNumber(150, 400)
-            }
-
-            await utils.wait(delay)
-        }
     }
 }

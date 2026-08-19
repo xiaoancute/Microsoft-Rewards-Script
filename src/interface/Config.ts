@@ -1,61 +1,42 @@
 export interface Config {
-    baseURL: string
     sessionPath: string
     headless: boolean
     clusters: number
     errorDiagnostics: boolean
     ensureStreakProtection: boolean
+    autoClaimPunchcardRewards: boolean
+    skipNonPointTasks: boolean
+    accountDelay: ConfigDelay
     workers: ConfigWorkers
+    activities: ConfigActivities
     searchOnBingLocalQueries: boolean
     globalTimeout: number | string
     searchSettings: ConfigSearchSettings
+    experimental: ConfigExperimental
     debugLogs: boolean
     proxy: ConfigProxy
     consoleLogFilter: LogFilter
     webhook: ConfigWebhook
-    /** 可选：安静时段。落在这个区间里启动时会等到区间外才开始（跨日也支持）。真人不会凌晨 3 点搜索。 */
-    quietHours?: ConfigQuietHours
-    riskControlStop?: ConfigRiskControlStop
-    accountHealth?: ConfigAccountHealth
 }
 
-export interface ConfigRiskControlStop {
-    enabled: boolean
-}
+export type QueryEngine = 'google' | 'wikipedia' | 'wikirandom' | 'hackernews' | 'reddit' | 'local'
 
-export interface ConfigAccountHealth {
-    autoSkip?: {
-        enabled?: boolean
-        riskCooldownHours?: number
-        maxConsecutiveFailures?: number
-    }
-}
-
-export interface ConfigQuietHours {
-    /** true 才真的生效，省得用户误触发。 */
-    enabled: boolean
-    /** HH:MM 24 小时制。例如 "01:00"。 */
-    start: string
-    /** HH:MM 24 小时制。例如 "06:00"。start > end 表示跨午夜（例如 23:00→07:00）。 */
-    end: string
-}
-
-export type QueryEngine = 'china' | 'google' | 'wikipedia' | 'reddit' | 'local'
+// RSS feeds are selected with a dotted path: 'rss' (every catalogued feed),
+// 'rss.<site>' (every feed for that site), or 'rss.<site>.<endpoint>' (one feed).
+export type RssFeedSelector = 'rss' | `rss.${string}`
+export type QueryEngineEntry = QueryEngine | RssFeedSelector
 
 export interface ConfigSearchSettings {
     scrollRandomResults: boolean
-    clickRandomResults: boolean | number
+    clickRandomResults: boolean
+    runOnZeroPoints: boolean
+    maxBonusSearches: number
     parallelSearching: boolean
-    queryEngines: QueryEngine[]
-    /** 访问一个随机结果后停留的时间。支持单值（"20sec"）或随机区间 `{min, max}`。 */
-    searchResultVisitTime: number | string | ConfigDelay
+    clusterSearch: boolean
+    queryEngines: QueryEngineEntry[]
+    searchResultVisitTime: number | string
     searchDelay: ConfigDelay
     readDelay: ConfigDelay
-    /**
-     * 查询词变体：从 queryEngine 返回的词以小概率附加后缀（"新闻"/"最近"/"怎么样" 等），
-     * 让跨账号即使词源重合也会呈现不同形态。默认 true。
-     */
-    queryMutation?: boolean
 }
 
 export interface ConfigDelay {
@@ -63,28 +44,43 @@ export interface ConfigDelay {
     max: number | string
 }
 
+export interface ConfigExperimental {
+    apiSearch: boolean
+    apiSearchOnBing: boolean
+    blockMedia: boolean
+    edgeBrowsing: boolean
+}
+
 export interface ConfigProxy {
     queryEngine: boolean
+    ignoreCertificateErrors: boolean
 }
 
 export interface ConfigWorkers {
     doDailySet: boolean
-    doSpecialPromotions: boolean
     doMorePromotions: boolean
     doClaimBonusPoints: boolean
     doPunchCards: boolean
     doAppPromotions: boolean
     doDesktopSearch: boolean
     doMobileSearch: boolean
+    doBonusSearches: boolean
     doDailyCheckIn: boolean
     doReadToEarn: boolean
+    doActivateSearchPerk: boolean
+    doVisualSearch: boolean
+}
+
+export interface ConfigActivities {
+    urlReward: boolean
+    searchOnBing: boolean
 }
 
 // Webhooks
 export interface ConfigWebhook {
     discord?: WebhookDiscordConfig
     ntfy?: WebhookNtfyConfig
-    pushplus?: WebhookPushPlusConfig
+    telegram?: WebhookTelegramConfig
     webhookLogFilter: LogFilter
 }
 
@@ -111,10 +107,8 @@ export interface WebhookNtfyConfig {
     priority?: 1 | 2 | 3 | 4 | 5 // 5 highest (important)
 }
 
-export interface WebhookPushPlusConfig {
+export interface WebhookTelegramConfig {
     enabled?: boolean
-    token: string
-    title?: string
-    template?: 'txt' | 'html' | 'markdown'
-    channel?: string
+    botToken: string
+    chatId: string | number
 }

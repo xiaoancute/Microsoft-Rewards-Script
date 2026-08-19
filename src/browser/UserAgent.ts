@@ -1,194 +1,274 @@
-import axios from 'axios'
+import { URLs } from '../constants/urls'
+import { httpRequest } from '../util/Http'
 import type { BrowserFingerprintWithHeaders } from 'fingerprint-generator'
 
+import { BROWSER_VERSION_FALLBACKS } from '../constants/browserVersions'
 import type { ChromeVersion, EdgeVersion } from '../interface/UserAgentUtil'
 import type { MicrosoftRewardsBot } from '../index'
 
-interface ResolvedBrowserVersions {
-    edgeVersions: {
-        android: string
-        windows: string
-    }
-    chromeVersion: string
+interface EdgeVersions {
+    android: string
+    desktop: string
+}
+
+interface AppComponents {
+    not_a_brand_version: string
+    not_a_brand_major_version: string
+    edge_version: string
+    edge_major_version: string
+    chrome_version: string
+    chrome_major_version: string
+    chrome_reduced_version: string
 }
 
 export class UserAgentManager {
     private static readonly NOT_A_BRAND_VERSION = '99'
-    private static readonly VERSION_REQUEST_TIMEOUT_MS = 4000
-    private static resolvedVersionsCache: ResolvedBrowserVersions | null = null
-    private static resolvedVersionsInFlight: Promise<ResolvedBrowserVersions> | null = null
+    private static readonly VERSION_LOOKUP_TIMEOUT_MS = 5000
+    private static readonly VERSION_PATTERN = /^\d+\.\d+\.\d+\.\d+$/
+    private readonly appComponents = new Map<boolean, Promise<AppComponents>>()
 
-    constructor(private bot: MicrosoftRewardsBot) {}
+    private static readonly MOBILE_MODELS = [
+        // Samsung Galaxy S series
+        'SM-S948B', // Galaxy S26 Ultra
+        'SM-S947B', // Galaxy S26+
+        'SM-S942B', // Galaxy S26
+        'SM-S938B', // Galaxy S25 Ultra
+        'SM-S937B', // Galaxy S25 Edge
+        'SM-S936B', // Galaxy S25+
+        'SM-S931B', // Galaxy S25
+        'SM-S928B', // Galaxy S24 Ultra
+        'SM-S926B', // Galaxy S24+
+        'SM-S921B', // Galaxy S24
+        'SM-S918B', // Galaxy S23 Ultra
+        'SM-S916B', // Galaxy S23+
+        'SM-S911B', // Galaxy S23
 
-    async getUserAgent(isMobile: boolean) {
-        const { userAgent, userAgentMetadata } = await this.resolveUserAgentData(isMobile)
-        return { userAgent, userAgentMetadata }
+        // Samsung Galaxy Z series
+        'SM-F966B', // Galaxy Z Fold7
+        'SM-F956B', // Galaxy Z Fold6
+        'SM-F946B', // Galaxy Z Fold5
+        'SM-F741B', // Galaxy Z Flip6
+        'SM-F731B', // Galaxy Z Flip5
+
+        // Samsung
+        'SM-A566B', // Galaxy A56 5G
+        'SM-A556B', // Galaxy A55 5G
+        'SM-A546B', // Galaxy A54 5G
+        'SM-A356B', // Galaxy A35 5G
+        'SM-A346B', // Galaxy A34 5G
+        'SM-A266B', // Galaxy A26 5G
+        'SM-A256B', // Galaxy A25 5G
+        'SM-A166B', // Galaxy A16 5G
+        'SM-A156B', // Galaxy A15 5G
+
+        // Google Pixel
+        'Pixel 10 Pro Fold',
+        'Pixel 10 Pro XL',
+        'Pixel 10 Pro',
+        'Pixel 10',
+        'Pixel 10a',
+        'Pixel 9 Pro Fold',
+        'Pixel 9 Pro XL',
+        'Pixel 9 Pro',
+        'Pixel 9',
+        'Pixel 9a',
+        'Pixel 8 Pro',
+        'Pixel 8',
+        'Pixel 8a',
+        'Pixel 7 Pro',
+        'Pixel 7',
+        'Pixel 7a',
+        'Pixel Fold',
+
+        // OnePlus
+        'CPH2653', // OnePlus 13
+        'CPH2649', // OnePlus 13
+        'CPH2655', // OnePlus 13
+        'CPH2581', // OnePlus 12
+        'CPH2573', // OnePlus 12
+        'CPH2449', // OnePlus 11
+        'CPH2415', // OnePlus 10T
+
+        // Nothing
+        'A059', // Nothing Phone (3a)
+        'A059P', // Nothing Phone (3a) Pro
+        'A142', // Nothing Phone (2a)
+        'A065', // Nothing Phone (2)
+
+        // Motorola
+        'motorola edge 50 pro',
+        'motorola edge 50 neo',
+        'motorola edge 40 pro',
+        'moto g85 5G',
+        'moto g84 5G',
+        'moto g54 5G'
+    ]
+
+    constructor(
+        private bot: MicrosoftRewardsBot,
+        private readonly request: typeof httpRequest = httpRequest
+    ) {}
+
+    private static pickMobileModel(): string {
+        const pool = UserAgentManager.MOBILE_MODELS
+        return pool[Math.floor(Math.random() * pool.length)] ?? 'Pixel 8'
     }
 
-    private async resolveUserAgentData(isMobile: boolean) {
-        const system = this.getSystemComponents(isMobile)
-        const componentData = await this.getAppComponents(isMobile)
+    async getUserAgent(isMobile: boolean) {
+        const androidVersion = isMobile ? 10 + Math.floor(Math.random() * 6) : 0 // Android 10-15
+        const system = this.getSystemComponents(isMobile, androidVersion)
+        const app = await this.getAppComponents(isMobile)
 
         const uaTemplate = isMobile
-            ? `Mozilla/5.0 (${system}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${componentData.chrome_reduced_version} Mobile Safari/537.36 EdgA/${componentData.edge_version}`
-            : `Mozilla/5.0 (${system}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${componentData.chrome_reduced_version} Safari/537.36 Edg/${componentData.edge_version}`
+            ? `Mozilla/5.0 (${system}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${app.chrome_reduced_version} Mobile Safari/537.36 EdgA/${app.edge_version}`
+            : `Mozilla/5.0 (${system}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${app.chrome_reduced_version} Safari/537.36 Edg/${app.edge_version}`
 
-        const platformVersion = `${isMobile ? Math.floor(Math.random() * 5) + 9 : Math.floor(Math.random() * 15) + 1}.0.0`
+        const platformVersion = isMobile ? `${androidVersion}.0.0` : `${Math.floor(Math.random() * 15) + 1}.0.0`
+
+        // Keep the UA-CH platform aligned with the UA string's OS token
+        const desktopPlatform =
+            process.platform === 'darwin' ? 'macOS' : process.platform === 'linux' ? 'Linux' : 'Windows'
+
+        const model = isMobile ? UserAgentManager.pickMobileModel() : ''
 
         const uaMetadata = {
             isMobile,
-            platform: isMobile ? 'Android' : 'Windows',
+            platform: isMobile ? 'Android' : desktopPlatform,
             fullVersionList: [
                 { brand: 'Not/A)Brand', version: `${UserAgentManager.NOT_A_BRAND_VERSION}.0.0.0` },
-                { brand: 'Microsoft Edge', version: componentData.edge_version },
-                { brand: 'Chromium', version: componentData.chrome_version }
+                { brand: 'Microsoft Edge', version: app['edge_version'] },
+                { brand: 'Chromium', version: app['chrome_version'] }
             ],
             brands: [
                 { brand: 'Not/A)Brand', version: UserAgentManager.NOT_A_BRAND_VERSION },
-                { brand: 'Microsoft Edge', version: componentData.edge_major_version },
-                { brand: 'Chromium', version: componentData.chrome_major_version }
+                { brand: 'Microsoft Edge', version: app['edge_major_version'] },
+                { brand: 'Chromium', version: app['chrome_major_version'] }
             ],
             platformVersion,
             architecture: isMobile ? '' : 'x86',
             bitness: isMobile ? '' : '64',
-            model: ''
+            model
         }
 
-        return { userAgent: uaTemplate, userAgentMetadata: uaMetadata, componentData }
+        return { userAgent: uaTemplate, userAgentMetadata: uaMetadata }
     }
 
     async getChromeVersion(isMobile: boolean): Promise<string> {
-        return await this.runVersionRequest(
-            isMobile,
-            'USERAGENT-CHROME-VERSION',
-            async signal => {
-                const response = await axios({
-                    url: 'https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions.json',
-                    method: 'GET',
-                    timeout: UserAgentManager.VERSION_REQUEST_TIMEOUT_MS,
-                    signal,
-                    headers: {
-                        'Content-Type': 'application/json'
-                    }
-                })
-                const data: ChromeVersion = response.data
-                return data.channels.Stable.version
-            },
-            '144.0.7559.96'
-        )
-    }
-
-    async getEdgeVersions(isMobile: boolean) {
-        return await this.runVersionRequest(
-            isMobile,
-            'USERAGENT-EDGE-VERSION',
-            async signal => {
-                const response = await axios({
-                    url: 'https://edgeupdates.microsoft.com/api/products',
-                    method: 'GET',
-                    timeout: UserAgentManager.VERSION_REQUEST_TIMEOUT_MS,
-                    signal,
-                    headers: {
-                        'Content-Type': 'application/json'
-                    }
-                })
-                const data: EdgeVersion[] = response.data
-                const stable = data.find(x => x.Product == 'Stable') as EdgeVersion
-
-                return {
-                    android: stable.Releases.find(x => x.Platform == 'Android')?.ProductVersion ?? '144.0.3719.81',
-                    windows:
-                        stable.Releases.find(x => x.Platform == 'Windows' && x.Architecture == 'x64')?.ProductVersion ??
-                        '144.0.3719.82'
+        try {
+            const request = {
+                url: URLs.userAgent.chromeVersions,
+                method: 'GET',
+                timeout: UserAgentManager.VERSION_LOOKUP_TIMEOUT_MS,
+                headers: {
+                    'Content-Type': 'application/json'
                 }
-            },
-            {
-                android: '144.0.3719.81',
-                windows: '144.0.3719.82'
             }
-        )
+
+            const response = await this.request<ChromeVersion>(request)
+            const version = response.data?.channels?.Stable?.version
+            if (!UserAgentManager.isValidVersion(version)) {
+                throw new Error('Stable Chrome version was missing or invalid')
+            }
+            return version
+        } catch (error) {
+            const fallback = BROWSER_VERSION_FALLBACKS.chrome
+            this.bot.logger.warn(
+                isMobile,
+                'USERAGENT-CHROME-VERSION',
+                `Version lookup unavailable (${error instanceof Error ? error.message : String(error)}); using bundled fallback ${fallback}`
+            )
+            return fallback
+        }
     }
 
-    getSystemComponents(mobile: boolean): string {
+    async getEdgeVersions(isMobile: boolean): Promise<EdgeVersions> {
+        try {
+            const request = {
+                url: URLs.edge.products,
+                method: 'GET',
+                timeout: UserAgentManager.VERSION_LOOKUP_TIMEOUT_MS,
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            }
+
+            const response = await this.request<EdgeVersion[]>(request)
+            const stable = Array.isArray(response.data)
+                ? response.data.find(product => product.Product === 'Stable')
+                : undefined
+            const android = stable?.Releases.find(release => release.Platform === 'Android')?.ProductVersion
+            const desktopPlatform =
+                process.platform === 'darwin' ? 'MacOS' : process.platform === 'linux' ? 'Linux' : 'Windows'
+            const preferredArchitecture =
+                desktopPlatform === 'MacOS' ? 'universal' : process.arch === 'arm64' ? 'arm64' : 'x64'
+            const desktop =
+                stable?.Releases.find(
+                    release => release.Platform === desktopPlatform && release.Architecture === preferredArchitecture
+                )?.ProductVersion ??
+                stable?.Releases.find(release => release.Platform === desktopPlatform)?.ProductVersion
+
+            if (!UserAgentManager.isValidVersion(android) || !UserAgentManager.isValidVersion(desktop)) {
+                throw new Error('Stable Edge versions were missing or invalid')
+            }
+
+            return { android, desktop }
+        } catch (error) {
+            const fallback = BROWSER_VERSION_FALLBACKS.edge
+            this.bot.logger.warn(
+                isMobile,
+                'USERAGENT-EDGE-VERSION',
+                `Version lookup unavailable (${error instanceof Error ? error.message : String(error)}); using bundled fallbacks Android ${fallback.android}, Desktop ${fallback.windows}`
+            )
+            return { android: fallback.android, desktop: fallback.windows }
+        }
+    }
+
+    getSystemComponents(mobile: boolean, androidVersion = 13): string {
         if (mobile) {
-            const androidVersion = 10 + Math.floor(Math.random() * 5)
             return `Linux; Android ${androidVersion}; K`
         }
 
-        return 'Windows NT 10.0; Win64; x64'
+        switch (process.platform) {
+            case 'darwin':
+                return 'Macintosh; Intel Mac OS X 10_15_7'
+            case 'linux':
+                return 'X11; Linux x86_64'
+            default:
+                return 'Windows NT 10.0; Win64; x64'
+        }
     }
 
-    async getAppComponents(isMobile: boolean) {
-        const versions = await this.getResolvedBrowserVersions(isMobile)
-        const edgeVersion = isMobile ? versions.edgeVersions.android : versions.edgeVersions.windows
-        const edgeMajorVersion = edgeVersion?.split('.')[0]
+    getAppComponents(isMobile: boolean): Promise<AppComponents> {
+        const cached = this.appComponents.get(isMobile)
+        if (cached) return cached
 
-        const chromeVersion = versions.chromeVersion
-        const chromeMajorVersion = chromeVersion?.split('.')[0]
-        const chromeReducedVersion = `${chromeMajorVersion}.0.0.0`
+        const pending = this.loadAppComponents(isMobile)
+        this.appComponents.set(isMobile, pending)
+        return pending
+    }
+
+    private async loadAppComponents(isMobile: boolean): Promise<AppComponents> {
+        const [versions, chromeVersion] = await Promise.all([
+            this.getEdgeVersions(isMobile),
+            this.getChromeVersion(isMobile)
+        ])
+        const edgeVersion = isMobile ? versions.android : versions.desktop
+        const edgeMajorVersion = edgeVersion.split('.')[0]!
+        const chromeMajorVersion = chromeVersion.split('.')[0]!
 
         return {
             not_a_brand_version: `${UserAgentManager.NOT_A_BRAND_VERSION}.0.0.0`,
             not_a_brand_major_version: UserAgentManager.NOT_A_BRAND_VERSION,
-            edge_version: edgeVersion as string,
-            edge_major_version: edgeMajorVersion as string,
-            chrome_version: chromeVersion as string,
-            chrome_major_version: chromeMajorVersion as string,
-            chrome_reduced_version: chromeReducedVersion as string
+            edge_version: edgeVersion,
+            edge_major_version: edgeMajorVersion,
+            chrome_version: chromeVersion,
+            chrome_major_version: chromeMajorVersion,
+            chrome_reduced_version: `${chromeMajorVersion}.0.0.0`
         }
     }
 
-    private async getResolvedBrowserVersions(isMobile: boolean): Promise<ResolvedBrowserVersions> {
-        if (UserAgentManager.resolvedVersionsCache) {
-            return UserAgentManager.resolvedVersionsCache
-        }
-
-        if (!UserAgentManager.resolvedVersionsInFlight) {
-            UserAgentManager.resolvedVersionsInFlight = (async () => {
-                const [edgeVersions, chromeVersion] = await Promise.all([
-                    this.getEdgeVersions(isMobile),
-                    this.getChromeVersion(isMobile)
-                ])
-
-                const resolved = { edgeVersions, chromeVersion }
-                UserAgentManager.resolvedVersionsCache = resolved
-                return resolved
-            })().finally(() => {
-                UserAgentManager.resolvedVersionsInFlight = null
-            })
-        }
-
-        return await UserAgentManager.resolvedVersionsInFlight
-    }
-
-    private async runVersionRequest<T>(
-        isMobile: boolean,
-        logTag: string,
-        request: (signal: AbortSignal) => Promise<T>,
-        fallback: T
-    ): Promise<T> {
-        const controller = new AbortController()
-        let timeoutId: NodeJS.Timeout | undefined
-
-        const timeoutPromise = new Promise<never>((_, reject) => {
-            timeoutId = setTimeout(() => {
-                controller.abort()
-                reject(new Error(`request timed out after ${UserAgentManager.VERSION_REQUEST_TIMEOUT_MS}ms`))
-            }, UserAgentManager.VERSION_REQUEST_TIMEOUT_MS)
-        })
-
-        try {
-            return await Promise.race([request(controller.signal), timeoutPromise])
-        } catch (error) {
-            this.bot.logger.error(
-                isMobile,
-                logTag,
-                `发生错误: ${error instanceof Error ? error.message : String(error)}`
-            )
-            return fallback
-        } finally {
-            if (timeoutId) clearTimeout(timeoutId)
-        }
+    private static isValidVersion(version: unknown): version is string {
+        return typeof version === 'string' && UserAgentManager.VERSION_PATTERN.test(version)
     }
 
     async updateFingerprintUserAgent(
@@ -196,31 +276,35 @@ export class UserAgentManager {
         isMobile: boolean
     ): Promise<BrowserFingerprintWithHeaders> {
         try {
-            const { userAgent, userAgentMetadata, componentData } = await this.resolveUserAgentData(isMobile)
+            const userAgentData = await this.getUserAgent(isMobile)
+            const componentData = await this.getAppComponents(isMobile)
+            const meta = userAgentData.userAgentMetadata
 
             //@ts-expect-error Errors due it not exactly matching
-            fingerprint.fingerprint.navigator.userAgentData = userAgentMetadata
-            fingerprint.fingerprint.navigator.userAgent = userAgent
-            fingerprint.fingerprint.navigator.appVersion = userAgent.replace(
+            fingerprint.fingerprint.navigator.userAgentData = meta
+            fingerprint.fingerprint.navigator.userAgent = userAgentData.userAgent
+            fingerprint.fingerprint.navigator.appVersion = userAgentData.userAgent.replace(
                 `${fingerprint.fingerprint.navigator.appCodeName}/`,
                 ''
             )
-            fingerprint.fingerprint.navigator.platform = isMobile ? 'Linux armv8l' : 'Win32'
-            fingerprint.fingerprint.navigator.maxTouchPoints = isMobile ? 5 : 0
 
-            fingerprint.headers['user-agent'] = userAgent
+            fingerprint.headers['user-agent'] = userAgentData.userAgent
             fingerprint.headers['sec-ch-ua'] =
                 `"Microsoft Edge";v="${componentData.edge_major_version}", "Not=A?Brand";v="${componentData.not_a_brand_major_version}", "Chromium";v="${componentData.chrome_major_version}"`
             fingerprint.headers['sec-ch-ua-full-version-list'] =
                 `"Microsoft Edge";v="${componentData.edge_version}", "Not=A?Brand";v="${componentData.not_a_brand_version}", "Chromium";v="${componentData.chrome_version}"`
-            fingerprint.headers['sec-ch-ua-mobile'] = isMobile ? '?1' : '?0'
-            fingerprint.headers['sec-ch-ua-platform'] = `"${userAgentMetadata.platform}"`
+            fingerprint.headers['sec-ch-ua-mobile'] = meta.isMobile ? '?1' : '?0'
+            fingerprint.headers['sec-ch-ua-platform'] = `"${meta.platform}"`
+            fingerprint.headers['sec-ch-ua-platform-version'] = `"${meta.platformVersion}"`
+            fingerprint.headers['sec-ch-ua-arch'] = `"${meta.architecture}"`
+            fingerprint.headers['sec-ch-ua-bitness'] = `"${meta.bitness}"`
+            fingerprint.headers['sec-ch-ua-model'] = `"${meta.model}"`
 
             /*
             Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Mobile Safari/537.36 EdgA/129.0.0.0
             sec-ch-ua-full-version-list: "Microsoft Edge";v="129.0.2792.84", "Not=A?Brand";v="8.0.0.0", "Chromium";v="129.0.6668.90"
             sec-ch-ua: "Microsoft Edge";v="129", "Not=A?Brand";v="8", "Chromium";v="129"
-
+    
             Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36
             "Google Chrome";v="129.0.6668.90", "Not=A?Brand";v="8.0.0.0", "Chromium";v="129.0.6668.90"
             */
@@ -230,7 +314,7 @@ export class UserAgentManager {
             this.bot.logger.error(
                 isMobile,
                 'USER-AGENT-UPDATE',
-                `发生错误: ${error instanceof Error ? error.message : String(error)}`
+                `An error occurred: ${error instanceof Error ? error.message : String(error)}`
             )
             throw error
         }

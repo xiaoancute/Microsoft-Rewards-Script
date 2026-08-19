@@ -1,10 +1,8 @@
 import chalk from 'chalk'
 import cluster from 'cluster'
-import fs from 'fs'
-import path from 'path'
 import { sendDiscord } from './Discord'
 import { sendNtfy } from './Ntfy'
-import { sendPushPlus } from './PushPlus'
+import { sendTelegram } from './Telegram'
 import type { MicrosoftRewardsBot } from '../index'
 import { errorDiagnostic } from '../util/ErrorDiagnostic'
 import type { LogFilter } from '../interface/Config'
@@ -17,22 +15,14 @@ export interface IpcLog {
     level: LogLevel
 }
 
-/**
- * 独立的"紧急告警"消息——绕过 webhookLogFilter，保证封号等关键信号
- * 永远能到达所有启用的 webhook。和 IpcLog 走独立通道避免被用户的过滤规则误杀。
- */
-export interface IpcAlert {
-    content: string
-}
-
 type ChalkFn = (msg: string) => string
 
 function platformText(platform: Platform): string {
-    return platform === 'main' ? '主进程' : platform ? '移动端' : '桌面端'
+    return platform === 'main' ? 'MAIN' : platform ? 'MOBILE' : 'DESKTOP'
 }
 
 function platformBadge(platform: Platform): string {
-    return platform === 'main' ? chalk.bgCyan('主进程') : platform ? chalk.bgBlue('移动端') : chalk.bgMagenta('桌面端')
+    return platform === 'main' ? chalk.bgCyan('MAIN') : platform ? chalk.bgBlue('MOBILE') : chalk.bgMagenta('DESKTOP')
 }
 
 function getColorFn(color?: ColorKey): ChalkFn | null {
@@ -52,60 +42,16 @@ function consoleOut(level: LogLevel, msg: string, chalkFn: ChalkFn | null): void
 }
 
 function formatMessage(message: string | Error): string {
-    return message instanceof Error ? `${message.message}\n${message.stack || ''}` : message
-}
+    if (!(message instanceof Error)) return message.replace(/\r?\n/g, '\\n')
 
-export function redactSensitiveText(value: string): string {
-    let text = value
+    const stackFrames = message.stack
+        ?.split(/\r?\n/)
+        .slice(1)
+        .map(line => line.trim())
+        .filter(Boolean)
+        .join(' <- ')
 
-    text = text.replace(
-        /([?&](?:code|access_token|refresh_token|id_token|client_secret|password|passwd|pwd|__RequestVerificationToken)=)([^&#\s]+)/gi,
-        '$1[REDACTED]'
-    )
-    text = text.replace(
-        /\b((?:access_token|refresh_token|id_token|client_secret|password|passwd|pwd|__RequestVerificationToken)\s*[:=]\s*)(["']?)[^\s"',;&]+/gi,
-        '$1$2[REDACTED]'
-    )
-    text = text.replace(/\b(authorization\s*:\s*bearer\s+)[^\s]+/gi, '$1[REDACTED]')
-    text = text.replace(/\b(cookie|set-cookie)\s*:\s*[^\r\n]+/gi, '$1: [REDACTED]')
-    text = text.replace(/(["']?cookie["']?\s*[:=]\s*["'])[^"']+(["'])/gi, '$1[REDACTED]$2')
-
-    return text
-}
-
-/**
- * 确保日志目录存在
- */
-function ensureLogDirectory(): string {
-    const logDir = path.join(process.cwd(), 'logs')
-    if (!fs.existsSync(logDir)) {
-        fs.mkdirSync(logDir, { recursive: true })
-    }
-    return logDir
-}
-
-/**
- * 获取当前日期的日志文件路径
- */
-function getLogFilePath(): string {
-    const logDir = ensureLogDirectory()
-    const today = new Date().toISOString().split('T')[0] // YYYY-MM-DD格式
-    return path.join(logDir, `${today}.log`)
-}
-
-/**
- * 将日志写入文件
- */
-function writeLogToFile(logContent: string): void {
-    try {
-        const logFilePath = getLogFilePath()
-        const timestamp = new Date().toISOString()
-        const logEntry = `${timestamp} ${logContent}\n`
-
-        fs.appendFileSync(logFilePath, logEntry, 'utf8')
-    } catch (error) {
-        console.error('[Logger] 写入日志文件失败:', error)
-    }
+    return stackFrames ? `${message.message} | stack=${stackFrames}` : message.message
 }
 
 export class Logger {
@@ -127,41 +73,6 @@ export class Logger {
         return this.baseLog('debug', isMobile, title, message, color)
     }
 
-    /**
-     * 紧急告警：用于账号被封、异常频发等必须立刻让用户知道的事。
-     *
-     * 和 info/warn/error 不同，alert 绕过 webhookLogFilter：
-     * 不管用户的 whitelist/blacklist 怎么设，都会发到所有启用的 webhook
-     *（Discord、ntfy、PushPlus）。控制台和本地日志文件照常输出。
-     */
-    alert(isMobile: Platform, title: string, message: string | Error) {
-        const now = new Date().toLocaleString()
-        const formatted = redactSensitiveText(formatMessage(message))
-        const userName = this.bot.userData.userName ? this.bot.userData.userName : '主进程'
-        const cleanMsg = `[${now}] [${userName}] [🚨 ALERT] ${platformText(isMobile)} [${title}] ${formatted}`
-
-        writeLogToFile(cleanMsg)
-
-        const badge = platformBadge(isMobile)
-        const consoleStr = `[${now}] [${userName}] [🚨 ALERT] ${badge} [${title}] ${formatted}`
-        consoleOut('error', consoleStr, getColorFn('red'))
-
-        const { webhook } = this.bot.config
-        if (cluster.isPrimary) {
-            if (webhook.discord?.enabled && webhook.discord.url) {
-                sendDiscord(webhook.discord.url, cleanMsg, 'error')
-            }
-            if (webhook.ntfy?.enabled && webhook.ntfy.url) {
-                sendNtfy(webhook.ntfy, cleanMsg, 'error')
-            }
-            if (webhook.pushplus?.enabled && webhook.pushplus.token) {
-                sendPushPlus(webhook.pushplus, cleanMsg)
-            }
-        } else {
-            process.send?.({ __ipcAlert: { content: cleanMsg } } as { __ipcAlert: IpcAlert })
-        }
-    }
-
     private baseLog(
         level: LogLevel,
         isMobile: Platform,
@@ -170,9 +81,9 @@ export class Logger {
         color?: ColorKey
     ): void {
         const now = new Date().toLocaleString()
-        const formatted = redactSensitiveText(formatMessage(message))
+        const formatted = formatMessage(message)
 
-        const userName = this.bot.userData.userName ? this.bot.userData.userName : '主进程'
+        const userName = this.bot.userData.userName ? this.bot.userData.userName : 'MAIN'
 
         const levelTag = level.toUpperCase()
         const cleanMsg = `[${now}] [${userName}] [${levelTag}] ${platformText(isMobile)} [${title}] ${formatted}`
@@ -182,9 +93,6 @@ export class Logger {
         if (level === 'debug' && !config.debugLogs && !process.argv.includes('-dev')) {
             return
         }
-
-        // 保存日志到本地文件
-        writeLogToFile(cleanMsg)
 
         const badge = platformBadge(isMobile)
         const consoleStr = `[${now}] [${userName}] [${levelTag}] ${badge} [${title}] ${formatted}`
@@ -234,13 +142,22 @@ export class Logger {
                 if (level === 'debug') return
                 sendNtfy(config.webhook.ntfy, cleanMsg, level)
             }
+
+            if (
+                config.webhook.telegram?.enabled &&
+                config.webhook.telegram.botToken &&
+                config.webhook.telegram.chatId
+            ) {
+                if (level === 'debug') return
+                sendTelegram(config.webhook.telegram, cleanMsg, level)
+            }
         } else {
             process.send?.({ __ipcLog: { content: cleanMsg, level } })
         }
     }
 
     private shouldPassFilter(filter: LogFilter | undefined, level: LogLevel, message: string): boolean {
-        // 如果禁用或未设置，则允许所有日志通过
+        // If disabled or not, let all logs pass
         if (!filter || !filter.enabled) {
             return true
         }

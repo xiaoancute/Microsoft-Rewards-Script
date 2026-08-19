@@ -1,222 +1,256 @@
-import type { AxiosRequestConfig } from 'axios'
+import type { HttpRequestConfig } from '../util/Http'
 import * as fs from 'fs'
 import path from 'path'
-import type { GoogleSearch, GoogleTrendsResponse, RedditListing, WikipediaTopResponse } from '../interface/Search'
+import { XMLParser } from 'fast-xml-parser'
+
+import { URLs } from '../constants/urls'
+import { RSS_FEEDS } from '../constants/rssFeeds'
+import type {
+    GoogleSearch,
+    GoogleTrendsResponse,
+    HackerNewsResponse,
+    RedditListing,
+    WikipediaRandomResponse,
+    WikipediaTopResponse
+} from '../interface/Search'
+import type { QueryEngine, QueryEngineEntry } from '../interface/Config'
 import type { MicrosoftRewardsBot } from '../index'
-import { QueryEngine } from '../interface/Config'
+
+const GOOGLE_TRENDS_RPC_ID = 'i0OFE'
+const MAX_CLUSTER_SUGGESTIONS = 8
+const MAX_RSS_XML_BYTES = 2 * 1024 * 1024
+const XML_DECLARATION_RE = /<!\s*(?:DOCTYPE|ENTITY)\b/i
+
+interface QueryManagerOptions {
+    shuffle?: boolean
+    sourceOrder?: QueryEngineEntry[]
+    langCode?: string
+    geoLocale?: string
+}
+
+interface RssEntry {
+    title?: unknown
+}
+interface RssDocument {
+    rss?: { channel?: { item?: RssEntry | RssEntry[] } }
+    'rdf:RDF'?: { item?: RssEntry | RssEntry[] }
+    feed?: { entry?: RssEntry | RssEntry[] }
+}
+
+function toArray(value: RssEntry | RssEntry[] | undefined): RssEntry[] {
+    if (!value) return []
+    return Array.isArray(value) ? value : [value]
+}
+
+function readTitle(title: unknown): string {
+    if (typeof title === 'string') return title
+    if (typeof title === 'number') return String(title)
+    if (title && typeof title === 'object' && '#text' in title) {
+        const text = (title as { '#text'?: unknown })['#text']
+        return typeof text === 'string' ? text : typeof text === 'number' ? String(text) : ''
+    }
+    return ''
+}
+
+function stripHtml(text: string): string {
+    return text.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ')
+}
+
+export function normalizeQueryKey(query: string): string {
+    return query.trim().replace(/\s+/g, ' ').toLowerCase()
+}
 
 export class QueryCore {
     constructor(private bot: MicrosoftRewardsBot) {}
 
-    async queryManager(
-        options: {
-            shuffle?: boolean
-            sourceOrder?: QueryEngine[]
-            related?: boolean
-            langCode?: string
-            geoLocale?: string
-        } = {}
-    ): Promise<string[]> {
+    async queryManager(options: QueryManagerOptions = {}): Promise<string[]> {
         const {
             shuffle = false,
-            sourceOrder = ['china', 'google', 'wikipedia', 'reddit', 'local'],
-            related = true,
-            langCode = 'zh',
-            geoLocale = 'CN'
+            sourceOrder = ['google', 'wikipedia', 'wikirandom', 'hackernews', 'reddit', 'local'],
+            langCode = 'en',
+            geoLocale = 'US'
         } = options
 
         try {
             this.bot.logger.debug(
                 this.bot.isMobile,
                 'QUERY-MANAGER',
-                `开始 | shuffle=${shuffle}, related=${related}, lang=${langCode}, geo=${geoLocale}, sources=${sourceOrder.join(',')}`
+                `Building main topic pool | sources=${sourceOrder.join(',')} | shuffle=${shuffle} | lang=${langCode} | geo=${geoLocale}`
             )
 
-            const topicLists: string[][] = []
-
-            const sourceHandlers: Record<
-                'china' | 'google' | 'wikipedia' | 'reddit' | 'local',
-                (() => Promise<string[]>) | (() => string[])
-            > = {
-                google: async () => {
-                    const topics = await this.getGoogleTrends(geoLocale.toUpperCase()).catch(() => [])
-                    this.bot.logger.debug(this.bot.isMobile, 'QUERY-MANAGER', `谷歌: ${topics.length}`)
-                    return topics
-                },
-                wikipedia: async () => {
-                    const topics = await this.getWikipediaTrending(langCode).catch(() => [])
-                    this.bot.logger.debug(this.bot.isMobile, 'QUERY-MANAGER', `维基百科: ${topics.length}`)
-                    return topics
-                },
-                reddit: async () => {
-                    const topics = await this.getRedditTopics().catch(() => [])
-                    this.bot.logger.debug(this.bot.isMobile, 'QUERY-MANAGER', `Reddit: ${topics.length}`)
-                    return topics
-                },
-                local: () => {
-                    const topics = this.getLocalQueryList()
-                    this.bot.logger.debug(this.bot.isMobile, 'QUERY-MANAGER', `本地: ${topics.length}`)
-                    return topics
-                },
-                china: async () => {
-                    const topics = await this.getChinaTrends(geoLocale.toUpperCase()).catch(() => [])
-                    this.bot.logger.debug(this.bot.isMobile, 'QUERY-MANAGER', `中国: ${topics.length}`)
-                    return topics
-                }
+            const sourceHandlers: Record<QueryEngine, () => Promise<string[]> | string[]> = {
+                google: () => this.getGoogleTrends(geoLocale.toUpperCase()).catch(() => []),
+                wikipedia: () => this.getWikipediaTrending(langCode).catch(() => []),
+                wikirandom: () => this.getWikipediaRandom(langCode).catch(() => []),
+                hackernews: () => this.getHackerNewsTopics().catch(() => []),
+                reddit: () => this.getRedditTopics().catch(() => []),
+                local: () => this.getLocalQueryList()
             }
 
-            for (const source of sourceOrder) {
+            const isRss = (source: string) => source === 'rss' || source.startsWith('rss.')
+            const coreSources = sourceOrder.filter(source => !isRss(source)) as QueryEngine[]
+            const rssSelectors = sourceOrder.filter(isRss)
+
+            const topicLists: string[][] = []
+            for (const source of coreSources) {
                 const handler = sourceHandlers[source]
                 if (!handler) continue
 
                 const topics = await Promise.resolve(handler())
+                this.bot.logger.debug(
+                    this.bot.isMobile,
+                    'QUERY-MANAGER',
+                    `Source "${source}" returned ${topics.length}`
+                )
                 if (topics.length) topicLists.push(topics)
             }
 
-            this.bot.logger.debug(
-                this.bot.isMobile,
-                'QUERY-MANAGER',
-                `源组合 | 原始总数=${topicLists.flat().length}`
-            )
+            if (rssSelectors.length) {
+                const rssTopics = await this.getRssTopics(rssSelectors).catch(() => [])
+                this.bot.logger.debug(
+                    this.bot.isMobile,
+                    'QUERY-MANAGER',
+                    `Source "rss" returned ${rssTopics.length} (${rssSelectors.length} selector(s))`
+                )
+                if (rssTopics.length) topicLists.push(rssTopics)
+            }
 
-            const baseTopics = this.normalizeAndDedupe(topicLists.flat())
-
-            if (!baseTopics.length) {
-                this.bot.logger.debug(this.bot.isMobile, 'QUERY-MANAGER', '未找到基础主题（所有源均为空）')
+            const rawTopics = topicLists.flat()
+            const topics = this.normalizeAndDedupe(rawTopics)
+            if (!topics.length) {
+                this.bot.logger.warn(this.bot.isMobile, 'QUERY-MANAGER', 'No topics returned by any source')
                 return []
             }
 
-            this.bot.logger.debug(
-                this.bot.isMobile,
-                'QUERY-MANAGER',
-                `基础主题去重 | 之前=${topicLists.flat().length} | 之后=${baseTopics.length}`
-            )
-            this.bot.logger.debug(this.bot.isMobile, 'QUERY-MANAGER', `基础主题: ${baseTopics.length}`)
-
-            const clusters = related ? await this.buildRelatedClusters(baseTopics, langCode) : baseTopics.map(t => [t])
-
-            this.bot.utils.shuffleArray(clusters)
-            this.bot.logger.debug(this.bot.isMobile, 'QUERY-MANAGER', '聚类已打乱')
-
-            let finalQueries = clusters.flat()
-            this.bot.logger.debug(
-                this.bot.isMobile,
-                'QUERY-MANAGER',
-                `聚类已展平 | 总数=${finalQueries.length}`
-            )
-
-            // 不要聚类搜索并打乱
             if (shuffle) {
-                this.bot.utils.shuffleArray(finalQueries)
-                this.bot.logger.debug(this.bot.isMobile, 'QUERY-MANAGER', '最终查询已打乱')
+                this.bot.utils.shuffleArray(topics)
+                this.bot.logger.debug(
+                    this.bot.isMobile,
+                    'QUERY-MANAGER',
+                    `Shuffled main topic pool | first="${topics[0] ?? ''}"`
+                )
             }
 
-            finalQueries = this.normalizeAndDedupe(finalQueries)
             this.bot.logger.debug(
                 this.bot.isMobile,
                 'QUERY-MANAGER',
-                `最终查询去重 | 之后=${finalQueries.length}`
+                `Built main topic pool | raw=${rawTopics.length} | unique=${topics.length} | duplicatesRemoved=${rawTopics.length - topics.length}`
             )
-
-            if (!finalQueries.length) {
-                this.bot.logger.debug(this.bot.isMobile, 'QUERY-MANAGER', '最终查询去重后为0')
-                return []
-            }
-
-            this.bot.logger.debug(this.bot.isMobile, 'QUERY-MANAGER', `最终查询: ${finalQueries.length}`)
-
-            // 查询词变体：小概率给词尾加后缀，打散跨账号相同热搜词的分布
-            // 例如同一个"某明星"在账号 A 变成"某明星 新闻"、在账号 B 变成"某明星 怎么样"
-            if (this.bot.config.searchSettings.queryMutation !== false) {
-                finalQueries = this.mutateQueries(finalQueries)
-            }
-
-            return finalQueries
+            return topics
         } catch (error) {
-            this.bot.logger.debug(
+            this.bot.logger.error(
                 this.bot.isMobile,
                 'QUERY-MANAGER',
-                `错误: ${error instanceof Error ? `${error.name}: ${error.message}\n${error.stack ?? ''}` : String(error)}`
+                `Failed building main topic pool | ${error instanceof Error ? error.message : String(error)}`
             )
             return []
         }
     }
 
-    /**
-     * 查询词后缀变体池：中文常见修饰词。~18% 概率给词附加一个后缀。
-     * 用户可以通过 config.searchSettings.queryMutation: false 关掉整个行为。
-     */
-    private mutateQueries(queries: string[]): string[] {
-        const suffixes = ['新闻', '最近', '怎么样', '介绍', '百度百科', '知乎', '攻略', '2025', '是什么', '简介']
-        return queries.map(q => {
-            if (!q) return q
-            if (Math.random() >= 0.18) return q
-            const suffix = suffixes[Math.floor(Math.random() * suffixes.length)]
-            return suffix ? `${q} ${suffix}` : q
+    async getConfiguredSearchTopics(): Promise<string[]> {
+        return await this.queryManager({
+            shuffle: true,
+            langCode: (this.bot.userData.langCode ?? 'en').toLowerCase(),
+            geoLocale: (this.bot.userData.geoLocale ?? 'US').toUpperCase(),
+            sourceOrder: this.bot.config.searchSettings.queryEngines
         })
     }
 
-    private async buildRelatedClusters(baseTopics: string[], langCode: string): Promise<string[][]> {
-        const clusters: string[][] = []
+    async getSearchCluster(mainTopic: string): Promise<string[]> {
+        const normalizedMain = this.normalizeAndDedupe([mainTopic])[0]
+        if (!normalizedMain) return []
+        if (!this.bot.config.searchSettings.clusterSearch) {
+            this.bot.logger.debug(this.bot.isMobile, 'QUERY-CLUSTER', `Clustering disabled | main="${normalizedMain}"`)
+            return [normalizedMain]
+        }
 
-        const LIMIT = 50
-        const head = baseTopics.slice(0, LIMIT)
-        const tail = baseTopics.slice(LIMIT)
-
+        const langCode = (this.bot.userData.langCode ?? 'en').toLowerCase()
         this.bot.logger.debug(
             this.bot.isMobile,
-            'QUERY-MANAGER',
-            `启用相关搜索 | 基础主题=${baseTopics.length} | 扩展=${head.length} | 直接通过=${tail.length} | 语言=${langCode}`
-        )
-        this.bot.logger.debug(
-            this.bot.isMobile,
-            'QUERY-MANAGER',
-            `启用必应扩展 | 限制=${LIMIT} | 总调用次数=${head.length * 2}`
+            'QUERY-CLUSTER',
+            `Fetching related queries | main="${normalizedMain}" | lang=${langCode} | limit=${MAX_CLUSTER_SUGGESTIONS}`
         )
 
-        for (const topic of head) {
-            const suggestions = await this.getBingSuggestions(topic, langCode).catch(() => [])
-            const relatedTerms = await this.getBingRelatedTerms(topic).catch(() => [])
+        const [suggestionsResult, relatedResult] = await Promise.allSettled([
+            this.getBingSuggestions(normalizedMain, langCode),
+            this.getBingRelatedTerms(normalizedMain)
+        ])
+        const rawSuggestions = suggestionsResult.status === 'fulfilled' ? suggestionsResult.value : []
+        const rawRelated = relatedResult.status === 'fulfilled' ? relatedResult.value : []
 
-            const usedSuggestions = suggestions.slice(0, 6)
-            const usedRelated = relatedTerms.slice(0, 3)
-
-            const cluster = this.normalizeAndDedupe([topic, ...usedSuggestions, ...usedRelated])
-
+        if (suggestionsResult.status === 'rejected') {
             this.bot.logger.debug(
                 this.bot.isMobile,
-                'QUERY-MANAGER',
-                `聚类已扩展 | 主题="${topic}" | 建议=${suggestions.length}->${usedSuggestions.length} | 相关=${relatedTerms.length}->${usedRelated.length} | 聚类大小=${cluster.length}`
+                'QUERY-CLUSTER',
+                `Related source unavailable | source=v7 | main="${normalizedMain}" | ${String(suggestionsResult.reason)}`
             )
-
-            clusters.push(cluster)
+        }
+        if (relatedResult.status === 'rejected') {
+            this.bot.logger.debug(
+                this.bot.isMobile,
+                'QUERY-CLUSTER',
+                `Related source unavailable | source=osjson | main="${normalizedMain}" | ${String(relatedResult.reason)}`
+            )
         }
 
-        if (tail.length) {
-            this.bot.logger.debug(this.bot.isMobile, 'QUERY-MANAGER', `聚类直通 | 主题=${tail.length}`)
+        const suggestions = this.normalizeAndDedupe(rawSuggestions)
+        const related = this.normalizeAndDedupe(rawRelated)
 
-            for (const topic of tail) {
-                clusters.push([topic])
-            }
+        this.bot.logger.debug(
+            this.bot.isMobile,
+            'QUERY-CLUSTER',
+            `Related source ready | source=v7 | main="${normalizedMain}" | raw=${rawSuggestions.length} | unique=${suggestions.length} | queries=${JSON.stringify(suggestions)}`
+        )
+
+        this.bot.logger.debug(
+            this.bot.isMobile,
+            'QUERY-CLUSTER',
+            `Related source ready | source=osjson | main="${normalizedMain}" | raw=${rawRelated.length} | unique=${related.length} | queries=${JSON.stringify(related)}`
+        )
+
+        const interleaved: string[] = []
+        const sourceLength = Math.max(suggestions.length, related.length)
+        for (let index = 0; index < sourceLength; index++) {
+            const suggestion = suggestions[index]
+            const relatedTerm = related[index]
+            if (suggestion) interleaved.push(suggestion)
+            if (relatedTerm) interleaved.push(relatedTerm)
         }
 
-        return clusters
+        const mainKey = normalizeQueryKey(normalizedMain)
+        const merged = this.normalizeAndDedupe(interleaved).filter(query => normalizeQueryKey(query) !== mainKey)
+        const selected = merged.slice(0, MAX_CLUSTER_SUGGESTIONS)
+
+        this.bot.logger.debug(
+            this.bot.isMobile,
+            'QUERY-CLUSTER',
+            `Related queries merged | main="${normalizedMain}" | availableSources=${Number(suggestions.length > 0) + Number(related.length > 0)} | unique=${merged.length} | selected=${selected.length} | queries=${JSON.stringify(selected)}`
+        )
+
+        const cluster = [normalizedMain, ...selected]
+        this.bot.utils.shuffleArray(cluster)
+
+        this.bot.logger.debug(
+            this.bot.isMobile,
+            'QUERY-CLUSTER',
+            `Cluster ready | main="${normalizedMain}" | related=${Math.max(0, cluster.length - 1)} | total=${cluster.length} | order=${JSON.stringify(cluster)}`
+        )
+        return cluster
     }
 
     private normalizeAndDedupe(queries: string[]): string[] {
         const seen = new Set<string>()
         const out: string[] = []
 
-        for (const q of queries) {
-            if (!q) continue
-            const trimmed = q.trim()
+        for (const query of queries) {
+            const trimmed = query?.trim()
             if (!trimmed) continue
 
-            const norm = trimmed.replace(/\s+/g, ' ').toLowerCase()
-            if (seen.has(norm)) continue
+            const key = normalizeQueryKey(trimmed)
+            if (seen.has(key)) continue
 
-            seen.add(norm)
-            out.push(trimmed)
+            seen.add(key)
+            out.push(trimmed.replace(/\s+/g, ' '))
         }
 
         return out
@@ -226,19 +260,19 @@ export class QueryCore {
         const queryTerms: GoogleSearch[] = []
 
         try {
-            const request: AxiosRequestConfig = {
-                url: 'https://trends.google.com/_/TrendsUi/data/batchexecute',
+            const request: HttpRequestConfig = {
+                url: URLs.queryEngine.googleTrends,
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'
                 },
-                data: `f.req=[[[i0OFE,"[null, null, \\"${geoLocale.toUpperCase()}\\", 0, null, 48]"]]]`
+                data: `f.req=[[[${GOOGLE_TRENDS_RPC_ID},"[null, null, \\"${geoLocale.toUpperCase()}\\", 0, null, 48]"]]]`
             }
 
-            const response = await this.bot.axios.request(request, this.bot.config.proxy.queryEngine)
+            const response = await this.bot.http.request<string>(request, this.bot.config.proxy.queryEngine)
             const trendsData = this.extractJsonFromResponse(response.data)
             if (!trendsData) {
-                this.bot.logger.debug(this.bot.isMobile, 'SEARCH-GOOGLE-TRENDS', '未能从响应中解析趋势数据')
+                this.bot.logger.debug(this.bot.isMobile, 'SEARCH-GOOGLE-TRENDS', 'No trends data parsed from response')
                 return []
             }
 
@@ -249,18 +283,13 @@ export class QueryCore {
             }
 
             for (const [topic, related] of mapped) {
-                queryTerms.push({
-                    topic: topic as string,
-                    related: related as string[]
-                })
+                queryTerms.push({ topic: topic as string, related: related as string[] })
             }
         } catch (error) {
             this.bot.logger.debug(
                 this.bot.isMobile,
                 'SEARCH-GOOGLE-TRENDS',
-                `请求失败: ${
-                    error instanceof Error ? `${error.name}: ${error.message}\n${error.stack ?? ''}` : String(error)
-                }`
+                `Request failed | ${error instanceof Error ? error.message : String(error)}`
             )
             return []
         }
@@ -279,39 +308,23 @@ export class QueryCore {
         return null
     }
 
-    async getBingSuggestions(query = '', langCode = 'zh'): Promise<string[]> {
+    async getBingSuggestions(query = '', langCode = 'en'): Promise<string[]> {
         try {
-            const request: AxiosRequestConfig = {
-                url: `https://www.bingapis.com/api/v7/suggestions?q=${encodeURIComponent(
-                    query
-                )}&appid=6D0A9B8C5100E9ECC7E11A104ADD76C10219804B&cc=xl&setlang=${langCode}`,
-                method: 'POST',
-                headers: {
-                    ...(this.bot.fingerprint?.headers ?? {}),
-                    'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'
-                }
+            const request: HttpRequestConfig = {
+                url: URLs.queryEngine.bingSuggestions(query, langCode),
+                method: 'GET',
+                headers: { ...(this.bot.fingerprint?.headers ?? {}) }
             }
 
-            const response = await this.bot.axios.request(request, this.bot.config.proxy.queryEngine)
-            const suggestions =
-                response.data.suggestionGroups?.[0]?.searchSuggestions?.map((x: { query: any }) => x.query) ?? []
-
-            if (!suggestions.length) {
-                this.bot.logger.debug(
-                    this.bot.isMobile,
-                    'SEARCH-BING-SUGGESTIONS',
-                    `空建议 | 查询="${query}" | 语言=${langCode}`
-                )
-            }
-
-            return suggestions
+            const response = await this.bot.http.request<{
+                suggestionGroups?: { searchSuggestions?: { query: string }[] }[]
+            }>(request, this.bot.config.proxy.queryEngine)
+            return response.data.suggestionGroups?.[0]?.searchSuggestions?.map((x: { query: string }) => x.query) ?? []
         } catch (error) {
             this.bot.logger.debug(
                 this.bot.isMobile,
                 'SEARCH-BING-SUGGESTIONS',
-                `请求失败 | 查询="${query}" | 语言=${langCode} | 错误=${
-                    error instanceof Error ? `${error.name}: ${error.message}\n${error.stack ?? ''}` : String(error)
-                }`
+                `Request failed | query="${query}" | ${error instanceof Error ? error.message : String(error)}`
             )
             return []
         }
@@ -319,251 +332,218 @@ export class QueryCore {
 
     async getBingRelatedTerms(query: string): Promise<string[]> {
         try {
-            const request: AxiosRequestConfig = {
-                url: `https://api.bing.com/osjson.aspx?query=${encodeURIComponent(query)}`,
+            const request: HttpRequestConfig = {
+                url: URLs.queryEngine.bingRelated(query),
                 method: 'GET',
-                headers: {
-                    ...(this.bot.fingerprint?.headers ?? {})
-                }
+                headers: { ...(this.bot.fingerprint?.headers ?? {}) }
             }
 
-            const response = await this.bot.axios.request(request, this.bot.config.proxy.queryEngine)
+            const response = await this.bot.http.request<unknown[]>(request, this.bot.config.proxy.queryEngine)
             const related = response.data?.[1]
-            const out = Array.isArray(related) ? related : []
-
-            if (!out.length) {
-                this.bot.logger.debug(
-                    this.bot.isMobile,
-                    'SEARCH-BING-RELATED',
-                    `空相关术语 | 查询="${query}"`
-                )
-            }
-
-            return out
+            return Array.isArray(related)
+                ? related.filter((term): term is string => typeof term === 'string' && term.trim().length > 0)
+                : []
         } catch (error) {
             this.bot.logger.debug(
                 this.bot.isMobile,
                 'SEARCH-BING-RELATED',
-                `请求失败 | 查询="${query}" | 错误=${
-                    error instanceof Error ? `${error.name}: ${error.message}\n${error.stack ?? ''}` : String(error)
-                }`
+                `Request failed | query="${query}" | ${error instanceof Error ? error.message : String(error)}`
             )
             return []
         }
     }
 
-    async getBingTrendingTopics(langCode = 'zh'): Promise<string[]> {
-        try {
-            const request: AxiosRequestConfig = {
-                url: `https://www.bing.com/api/v7/news/trendingtopics?appid=91B36E34F9D1B900E54E85A77CF11FB3BE5279E6&cc=xl&setlang=${langCode}`,
-                method: 'GET',
-                headers: {
-                    Authorization: `Bearer ${this.bot.accessToken}`,
-                    'User-Agent':
-                        'Bing/32.5.431027001 (com.microsoft.bing; build:431027001; iOS 17.6.1) Alamofire/5.10.2',
-                    'Content-Type': 'application/json',
-                    'X-Rewards-Country': this.bot.userData.geoLocale,
-                    'X-Rewards-Language': 'zh-CN',
-                    'X-Rewards-ismobile': 'true'
-                }
-            }
-
-            const response = await this.bot.axios.request(request, this.bot.config.proxy.queryEngine)
-            const topics =
-                response.data.value?.map(
-                    (x: { query: { text: string }; name: string }) => x.query?.text?.trim() || x.name.trim()
-                ) ?? []
-
-            if (!topics.length) {
-                this.bot.logger.debug(
-                    this.bot.isMobile,
-                    'SEARCH-BING-TRENDING',
-                    `空热门话题 | 语言=${langCode}`
-                )
-            }
-
-            return topics
-        } catch (error) {
-            this.bot.logger.debug(
-                this.bot.isMobile,
-                'SEARCH-BING-TRENDING',
-                `请求失败 | 语言=${langCode} | 错误=${
-                    error instanceof Error ? `${error.name}: ${error.message}\n${error.stack ?? ''}` : String(error)
-                }`
-            )
-            return []
-        }
-    }
-
-    async getWikipediaTrending(langCode = 'zh'): Promise<string[]> {
+    async getWikipediaTrending(langCode = 'en'): Promise<string[]> {
         try {
             const date = new Date(Date.now() - 24 * 60 * 60 * 1000)
-            const yyyy = date.getUTCFullYear()
-            const mm = String(date.getUTCMonth() + 1).padStart(2, '0')
-            const dd = String(date.getUTCDate()).padStart(2, '0')
+            const year = date.getUTCFullYear()
+            const month = String(date.getUTCMonth() + 1).padStart(2, '0')
+            const day = String(date.getUTCDate()).padStart(2, '0')
 
-            const request: AxiosRequestConfig = {
-                url: `https://wikimedia.org/api/rest_v1/metrics/pageviews/top/${langCode}.wikipedia/all-access/${yyyy}/${mm}/${dd}`,
+            const request: HttpRequestConfig = {
+                url: URLs.queryEngine.wikipediaTop(langCode, year, month, day),
                 method: 'GET',
-                headers: {
-                    ...(this.bot.fingerprint?.headers ?? {})
-                }
+                headers: { ...(this.bot.fingerprint?.headers ?? {}) }
             }
 
-            const response = await this.bot.axios.request(request, this.bot.config.proxy.queryEngine)
+            const response = await this.bot.http.request(request, this.bot.config.proxy.queryEngine)
             const articles = (response.data as WikipediaTopResponse).items?.[0]?.articles ?? []
 
-            const out = articles.slice(0, 50).map(a => a.article.replace(/_/g, ' '))
-
-            if (!out.length) {
-                this.bot.logger.debug(
-                    this.bot.isMobile,
-                    'SEARCH-WIKIPEDIA-TRENDING',
-                    `空维基百科热门 | 语言=${langCode}`
-                )
-            }
-
-            return out
+            return articles.slice(0, 50).map(a => a.article.replace(/_/g, ' '))
         } catch (error) {
             this.bot.logger.debug(
                 this.bot.isMobile,
                 'SEARCH-WIKIPEDIA-TRENDING',
-                `请求失败 | 语言=${langCode} | 错误=${
-                    error instanceof Error ? `${error.name}: ${error.message}\n${error.stack ?? ''}` : String(error)
-                }`
+                `Request failed | lang=${langCode} | ${error instanceof Error ? error.message : String(error)}`
             )
             return []
         }
     }
 
     async getRedditTopics(subreddit = 'popular'): Promise<string[]> {
+        const safe = subreddit.replace(/[^a-zA-Z0-9_+]/g, '')
         try {
-            const safe = subreddit.replace(/[^a-zA-Z0-9_+]/g, '')
-            const request: AxiosRequestConfig = {
-                url: `https://www.reddit.com/r/${safe}.json?limit=50`,
+            const request: HttpRequestConfig = {
+                url: URLs.queryEngine.reddit(safe),
                 method: 'GET',
-                headers: {
-                    ...(this.bot.fingerprint?.headers ?? {})
-                }
+                headers: { ...(this.bot.fingerprint?.headers ?? {}) }
             }
 
-            const response = await this.bot.axios.request(request, this.bot.config.proxy.queryEngine)
+            const response = await this.bot.http.request(request, this.bot.config.proxy.queryEngine)
             const posts = (response.data as RedditListing).data?.children ?? []
 
-            const out = posts.filter(p => !p.data.over_18).map(p => p.data.title)
-
-            if (!out.length) {
-                this.bot.logger.debug(
-                    this.bot.isMobile,
-                    'SEARCH-REDDIT-TRENDING',
-                    `空Reddit列表 | 子版块=${safe}`
-                )
-            }
-
-            return out
+            return posts.filter(p => !p.data.over_18).map(p => p.data.title)
         } catch (error) {
             this.bot.logger.debug(
                 this.bot.isMobile,
                 'SEARCH-REDDIT',
-                `请求失败 | 子版块=${subreddit} | 错误=${
-                    error instanceof Error ? `${error.name}: ${error.message}\n${error.stack ?? ''}` : String(error)
-                }`
+                `Request failed | subreddit=${safe} | ${error instanceof Error ? error.message : String(error)}`
             )
             return []
         }
+    }
+
+    async getHackerNewsTopics(): Promise<string[]> {
+        try {
+            const request: HttpRequestConfig = {
+                url: URLs.queryEngine.hackerNews,
+                method: 'GET',
+                headers: { ...(this.bot.fingerprint?.headers ?? {}) }
+            }
+
+            const response = await this.bot.http.request<HackerNewsResponse>(request, this.bot.config.proxy.queryEngine)
+            const hits = response.data?.hits ?? []
+
+            return hits.map(h => (h.title ?? '').replace(/^(?:Show|Ask)\s+HN:\s*/i, '').trim()).filter(Boolean)
+        } catch (error) {
+            this.bot.logger.debug(
+                this.bot.isMobile,
+                'SEARCH-HACKERNEWS',
+                `Request failed | ${error instanceof Error ? error.message : String(error)}`
+            )
+            return []
+        }
+    }
+
+    async getWikipediaRandom(langCode = 'en'): Promise<string[]> {
+        const lang = (langCode || 'en').split('-')[0] || 'en'
+        try {
+            const request: HttpRequestConfig = {
+                url: URLs.queryEngine.wikipediaRandom(lang),
+                method: 'GET',
+                headers: { ...(this.bot.fingerprint?.headers ?? {}) }
+            }
+
+            const response = await this.bot.http.request<WikipediaRandomResponse>(
+                request,
+                this.bot.config.proxy.queryEngine
+            )
+            const pages = response.data?.query?.random ?? []
+
+            return pages.map(p => p.title.trim()).filter(Boolean)
+        } catch (error) {
+            this.bot.logger.debug(
+                this.bot.isMobile,
+                'SEARCH-WIKIPEDIA-RANDOM',
+                `Request failed | lang=${lang} | ${error instanceof Error ? error.message : String(error)}`
+            )
+            return []
+        }
+    }
+
+    async getRssTopics(selectors: string[]): Promise<string[]> {
+        const urls = this.resolveRssUrls(selectors)
+        if (!urls.length) return []
+
+        const lists = await Promise.all(urls.map(url => this.fetchRssTitles(url).catch(() => [])))
+        return lists.flat()
+    }
+
+    private resolveRssUrls(selectors: string[]): string[] {
+        const urls = new Set<string>()
+
+        for (const selector of selectors) {
+            const [, site, endpoint] = selector.split('.')
+
+            if (!site) {
+                for (const feeds of Object.values(RSS_FEEDS)) {
+                    for (const url of Object.values(feeds)) urls.add(url)
+                }
+                continue
+            }
+
+            const feeds = RSS_FEEDS[site]
+            if (!feeds) {
+                this.bot.logger.warn(this.bot.isMobile, 'SEARCH-RSS', `Unknown RSS site "${site}" in "${selector}"`)
+                continue
+            }
+
+            if (!endpoint) {
+                for (const url of Object.values(feeds)) urls.add(url)
+                continue
+            }
+
+            const url = feeds[endpoint]
+            if (url) urls.add(url)
+            else this.bot.logger.warn(this.bot.isMobile, 'SEARCH-RSS', `Unknown RSS feed "${site}.${endpoint}"`)
+        }
+
+        return [...urls]
+    }
+
+    async fetchRssTitles(url: string): Promise<string[]> {
+        try {
+            const request: HttpRequestConfig = {
+                url,
+                method: 'GET',
+                headers: { ...(this.bot.fingerprint?.headers ?? {}) }
+            }
+
+            const response = await this.bot.http.request<string>(request, this.bot.config.proxy.queryEngine)
+            const xml = typeof response.data === 'string' ? response.data : String(response.data ?? '')
+            return this.parseRssTitles(xml)
+        } catch (error) {
+            this.bot.logger.debug(
+                this.bot.isMobile,
+                'SEARCH-RSS',
+                `Feed failed | ${url} | ${error instanceof Error ? error.message : String(error)}`
+            )
+            return []
+        }
+    }
+
+    private parseRssTitles(xml: string): string[] {
+        if (!xml) return []
+        if (Buffer.byteLength(xml, 'utf8') > MAX_RSS_XML_BYTES || XML_DECLARATION_RE.test(xml)) return []
+
+        let doc: RssDocument
+        try {
+            doc = new XMLParser({ ignoreAttributes: true, htmlEntities: true, parseTagValue: false }).parse(xml)
+        } catch {
+            return []
+        }
+
+        const entries = [
+            ...toArray(doc?.rss?.channel?.item),
+            ...toArray(doc?.['rdf:RDF']?.item),
+            ...toArray(doc?.feed?.entry)
+        ]
+
+        return entries.map(entry => stripHtml(readTitle(entry?.title)).trim()).filter(Boolean)
     }
 
     getLocalQueryList(): string[] {
         try {
             const file = path.join(__dirname, './search-queries.json')
             const queries = JSON.parse(fs.readFileSync(file, 'utf8')) as string[]
-            const out = Array.isArray(queries) ? queries : []
-
-            this.bot.logger.debug(
-                this.bot.isMobile,
-                'SEARCH-LOCAL-QUERY-LIST',
-                '本地查询已加载 | 文件=search-queries.json'
-            )
-
-            if (!out.length) {
-                this.bot.logger.debug(
-                    this.bot.isMobile,
-                    'SEARCH-LOCAL-QUERY-LIST',
-                    'search-queries.json 已解析但为空或无效'
-                )
-            }
-
-            return out
+            return Array.isArray(queries) ? queries : []
         } catch (error) {
             this.bot.logger.debug(
                 this.bot.isMobile,
                 'SEARCH-LOCAL-QUERY-LIST',
-                `读取/解析失败 | 错误=${
-                    error instanceof Error ? `${error.name}: ${error.message}\n${error.stack ?? ''}` : String(error)
-                }`
+                `Failed reading search-queries.json | ${error instanceof Error ? error.message : String(error)}`
             )
             return []
         }
-    }
-
-    /**
-     * 获取中国地区的热门搜索词（百度、抖音、微博等）
-     * @param geoLocale - 地理区域代码，默认为'CN'
-     * @returns Promise<GoogleSearch[]> - 包含主题和相关搜索词的数组
-     */
-    async getChinaTrends(geoLocale: string = 'CN'): Promise<string[]> {
-        const queryTerms: GoogleSearch[] = []
-        this.bot.logger.info(this.bot.isMobile, 'SEARCH-CHINA-TRENDS', `正在生成搜索查询，可能需要一些时间！ | 地理区域: ${geoLocale}`)
-        var appkey = "";//从https://www.gmya.net/api 网站申请的热门词接口APIKEY
-        var Hot_words_apis = "https://api.gmya.net/Api/";// 故梦热门词API接口网站
-        //{weibohot}微博热搜榜//{douyinhot}抖音热搜榜/{zhihuhot}知乎热搜榜/{baiduhot}百度热搜榜/{toutiaohot}今日头条热搜榜/
-        var keywords_source = ['BaiduHot', 'TouTiaoHot', 'DouYinHot', 'WeiBoHot'];
-        var random_keywords_source = keywords_source[Math.floor(Math.random() * keywords_source.length)];
-        var current_source_index = 0; // 当前搜索词来源的索引
-
-        while (current_source_index < keywords_source.length) {
-            // const source = keywords_source[current_source_index]; // 获取当前搜索词来源
-            const source = random_keywords_source; // 获取当前搜索词来源
-            let url;
-            //根据 appkey 是否为空来决定如何构建 URL地址,如果appkey为空,则直接请求接口地址
-            if (appkey) {
-                url = Hot_words_apis + source + "?format=json&appkey=" + appkey;//有appkey则添加appkey参数
-            } else {
-                url = Hot_words_apis + source;//无appkey则直接请求接口地址
-            }
-            try {
-                const response = await fetch(url); // 发起网络请求
-                if (!response.ok) {
-                    throw new Error('HTTP error! status: ' + response.status); // 如果响应状态不是OK，则抛出错误
-                }
-                this.bot.logger.info(this.bot.isMobile, 'SEARCH-CHINA-TRENDS', `已获取${source}搜索查询`)
-
-                const data = await response.json(); // 解析响应内容为JSON
-
-                // 显式指定 item 的类型为 any，解决隐式 any 类型的问题
-                if (data.data.some((item: any) => item)) {
-                    // 如果数据中存在有效项
-                    // 提取每个元素的title属性值
-                    const names = data.data.map((item: any) => item.title);
-                    // 显式指定 name 的类型为 string，解决隐式 any 类型的问题
-                    names.forEach((name: string) => {
-                        queryTerms.push({
-                            topic: name,
-                            related: []
-                        });
-                    });
-                    // 返回搜索到的title属性值列表
-                    return queryTerms.flatMap(x => [x.topic, ...x.related]);
-                }
-            } catch (error) {
-                // 当前来源请求失败，记录错误并尝试下一个来源
-                this.bot.logger.error(this.bot.isMobile, 'SEARCH-CHINA-TRENDS', `搜索词来源请求失败: ${error}`);
-            }
-            // 尝试下一个搜索词来源
-            current_source_index++;
-        }
-
-        return queryTerms.flatMap(x => [x.topic, ...x.related]);
-
     }
 }
