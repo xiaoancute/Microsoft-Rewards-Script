@@ -1,7 +1,12 @@
 /* global window */
 
-import { chromium } from 'patchright'
 import { newInjectedContext } from 'fingerprint-injector'
+import {
+    getEffectiveHeadless,
+    isTermuxRuntime,
+    preparePatchrightPlatform,
+    requireTermuxBrowserExecutable
+} from '../runtimePlatform.js'
 import {
     getDirname,
     getProjectRoot,
@@ -18,6 +23,9 @@ import {
     closeSessionDb,
     setupCleanupHandlers
 } from '../utils.js'
+
+preparePatchrightPlatform()
+const { chromium } = await import('patchright')
 
 const REWARDS_URL = 'https://rewards.bing.com'
 
@@ -119,7 +127,10 @@ async function main() {
     }
 
     log('INFO', `Session: ${args.email} (${platform})`)
-    log('INFO', '  Engine: bundled patched Chromium')
+    const headless = getEffectiveHeadless(false)
+    const executablePath = requireTermuxBrowserExecutable(headless)
+
+    log('INFO', `  Engine: ${executablePath ? `system Chromium (${executablePath})` : 'bundled patched Chromium'}`)
     log('INFO', `  Cookies: ${cookieCount}`)
     log('INFO', `  Fingerprint: ${fingerprint ? 'Yes' : 'No'}`)
     log('INFO', `  Fingerprint injector: ${useInjector ? 'Yes' : 'No (real browser)'}`)
@@ -130,14 +141,17 @@ async function main() {
 
     const runningAsRoot = typeof process.getuid === 'function' && process.getuid() === 0
     const sandboxArgs =
-        process.platform === 'linux' && runningAsRoot ? ['--no-sandbox', '--disable-setuid-sandbox'] : []
+        isTermuxRuntime || (process.platform === 'linux' && runningAsRoot)
+            ? ['--no-sandbox', '--disable-setuid-sandbox']
+            : []
     const ignoreCertificateErrors = Boolean(proxy && config.proxy?.ignoreCertificateErrors)
     const certArgs = ignoreCertificateErrors
         ? ['--ignore-certificate-errors', '--ignore-certificate-errors-spki-list', '--ignore-ssl-errors']
         : []
 
     const browser = await chromium.launch({
-        headless: false,
+        headless,
+        ...(executablePath && { executablePath }),
         ...(proxy ? { proxy } : {}),
         args: [...BROWSER_ARGS, ...sandboxArgs, ...certArgs]
     })

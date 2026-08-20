@@ -1,4 +1,4 @@
-import rebrowser, { BrowserContext } from 'patchright'
+import type { Browser as PatchrightBrowser, BrowserContext } from 'patchright'
 import { newInjectedContext } from 'fingerprint-injector'
 import { BrowserFingerprintWithHeaders, FingerprintGenerator } from 'fingerprint-generator'
 
@@ -7,6 +7,13 @@ import { loadSession, saveFingerprint } from '../util/SessionStore'
 import { fingerprintMatchesLocale } from '../util/Locale'
 import { formatBrowserProxyServer } from '../util/Proxy'
 import { UserAgentManager } from './UserAgent'
+import {
+    getEffectiveHeadless,
+    isTermuxRuntime,
+    nativePlatform,
+    preparePatchrightPlatform,
+    requireTermuxBrowserExecutable
+} from '../util/RuntimePlatform'
 
 import type { Account } from '../interface/Account'
 import { configureMediaBlocking } from './MediaBlocker'
@@ -46,12 +53,15 @@ class Browser {
     }
 
     async createBrowser(account: Account): Promise<BrowserCreationResult> {
-        const headless = this.bot.config.headless
+        preparePatchrightPlatform()
+        const headless = getEffectiveHeadless(this.bot.config.headless)
+        const executablePath = requireTermuxBrowserExecutable(headless)
+        const { chromium } = await import('patchright')
 
         const hasProxy = Boolean(account.proxy.url)
         const ignoreCertificateErrors = hasProxy && this.bot.config.proxy.ignoreCertificateErrors
 
-        let browser: rebrowser.Browser
+        let browser: PatchrightBrowser
         try {
             const proxyConfig = account.proxy.url
                 ? {
@@ -65,7 +75,7 @@ class Browser {
                 : undefined
 
             const runningAsRoot = typeof process.getuid === 'function' && process.getuid() === 0
-            const sandboxDisabled = process.platform === 'linux' && runningAsRoot
+            const sandboxDisabled = isTermuxRuntime || (process.platform === 'linux' && runningAsRoot)
             const sandboxArgs = sandboxDisabled ? ['--no-sandbox', '--disable-setuid-sandbox'] : []
 
             const certArgs = ignoreCertificateErrors
@@ -80,14 +90,23 @@ class Browser {
                 )
             }
 
+            if (headless !== this.bot.config.headless) {
+                this.bot.logger.warn(
+                    this.bot.isMobile,
+                    'BROWSER',
+                    'Termux has no display server; forcing headless browser mode'
+                )
+            }
+
             this.bot.logger.info(
                 this.bot.isMobile,
                 'BROWSER',
-                `Launching bundled patched Chromium (Edge UA) | headless=${headless} | platform=${process.platform} | proxy=${hasProxy ? 'yes' : 'no'} | tls=${ignoreCertificateErrors ? 'verification-disabled' : 'verified'} | sandbox=${sandboxDisabled ? 'disabled-root' : 'enabled'}`
+                `Launching ${executablePath ? `system Chromium (${executablePath})` : 'bundled patched Chromium'} (Edge UA) | headless=${headless} | platform=${nativePlatform}/${process.platform} | proxy=${hasProxy ? 'yes' : 'no'} | tls=${ignoreCertificateErrors ? 'verification-disabled' : 'verified'} | sandbox=${sandboxDisabled ? 'disabled' : 'enabled'}`
             )
 
-            browser = await rebrowser.chromium.launch({
+            browser = await chromium.launch({
                 headless,
+                ...(executablePath && { executablePath }),
                 ...(proxyConfig && { proxy: proxyConfig }),
                 args: [...Browser.BROWSER_ARGS, ...sandboxArgs, ...certArgs]
             })
@@ -202,7 +221,7 @@ class Browser {
 
     async generateFingerprint(isMobile: boolean): Promise<BrowserFingerprintWithHeaders> {
         const hostOs: 'windows' | 'macos' | 'linux' =
-            process.platform === 'darwin' ? 'macos' : process.platform === 'linux' ? 'linux' : 'windows'
+            nativePlatform === 'darwin' ? 'macos' : nativePlatform === 'win32' ? 'windows' : 'linux'
 
         const fingerPrintData = new FingerprintGenerator().getFingerprint({
             devices: isMobile ? ['mobile'] : ['desktop'],

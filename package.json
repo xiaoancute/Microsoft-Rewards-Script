@@ -8,8 +8,8 @@
         "node": ">=24.0.0"
     },
     "scripts": {
-        "pre-build": "npm i && rimraf dist && npx patchright install chromium",
-        "install:browser": "npx patchright install chromium",
+        "pre-build": "npm i && rimraf dist && node ./scripts/main/installBrowser.js",
+        "install:browser": "node ./scripts/main/installBrowser.js",
         "build": "rimraf dist && tsc && node ./scripts/main/copyAssets.js",
         "start": "node ./dist/index.js",
         "ts-start": "ts-node ./src/index.ts",
@@ -20,8 +20,11 @@
         "lint": "eslint .",
         "lint:fix": "eslint . --fix",
         "test:log-parser": "node --test scripts/api/logParser.test.js",
+        "test:http-transport": "npm run build && node --test scripts/httpTransport.test.js",
         "format": "prettier --write .",
         "format:check": "prettier --check .",
+        "smoke:browser": "node ./scripts/main/browserSmoke.js",
+        "test:runtime-platform": "node --test scripts/runtimePlatform.test.js",
         "clear-diagnostics": "rimraf diagnostics",
         "clear-sessions": "node ./scripts/main/clearSessions.js",
         "open-session": "node ./scripts/main/browserSession.js -email"
@@ -60,6 +63,7 @@
         "patchright": "^1.61.1",
         "semver": "^7.8.1",
         "ts-node": "^10.9.2",
+        "undici": "^8.10.0",
         "zod": "^4.4.3"
     }
 }

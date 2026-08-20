@@ -19,6 +19,7 @@
 - [Account Setup](#account-setup)
 - [Config Setup](#config-setup)
     - [Build and run the script (bare metal version)](#build-and-run-the-script-bare-metal-version)
+- [Termux (Android ARM64)](#termux-android-arm64)
 - [Docker](#docker)
 - [Control API and Dashboard](#control-api-and-dashboard)
 - [Nix Setup](#nix-setup)
@@ -93,6 +94,33 @@ npm run pre-build
 npm run build
 npm run start
 ```
+
+## Termux (Android ARM64)
+
+Patchright does not ship an Android browser binary, so Termux uses the system Chromium package instead. Install the required repositories, Node.js, and Chromium:
+
+```bash
+pkg update
+pkg install git nodejs x11-repo tur-repo
+pkg install chromium-beta
+```
+
+From the project directory, create and edit the normal account and config files, then install, verify, build, and run:
+
+```bash
+cp env.example .env
+cp config.example.json config.json
+npm run pre-build
+npm run smoke:browser
+npm run build
+npm run start
+```
+
+When neither `DISPLAY` nor `WAYLAND_DISPLAY` is set, Termux automatically runs Chromium headlessly even if `headless` is `false` in `config.json`. With Termux:X11 or another display server configured, the normal `headless` setting is respected.
+
+The browser executable is detected from the Termux prefix. Set `BROWSER_EXECUTABLE_PATH` in the environment or `.env` to use another Chromium-compatible executable.
+
+Termux uses Node's JavaScript HTTP transport for API/query requests because `impit` has no Android native package. HTTP(S) and SOCKS5 query proxies remain supported; SOCKS4 is supported by the browser but not by the Termux HTTP query transport.
 
 ## Docker
 
