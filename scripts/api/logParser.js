@@ -117,9 +117,19 @@ const RE = {
     flowCollected: /^积分已收集 \| 获得积分=(-?\d+) \| 现余额=(\d+) \| 账户=(\S+@\S+)/
 }
 
+// 部分中文日志沿用了中文字段名（如"必应搜索完成 | 获得积分=3 | 当前余额=1003"），
+// 另一部分仍用英文字段名；这里同时接受两种写法，避免实时积分解析漏计。
+const FIELD_ALIASES = {
+    pointsGained: ['pointsGained', '获得积分'],
+    currentBalance: ['currentBalance', '当前余额']
+}
+
 function numericField(message, name) {
-    const match = message.match(new RegExp(`(?:^| \\| )${name}=(-?\\d+(?:\\.\\d+)?)(?= \\| |$)`))
-    return match ? Number(match[1]) : null
+    for (const field of FIELD_ALIASES[name] ?? [name]) {
+        const match = message.match(new RegExp(`(?:^| \\| )${field}=(-?\\d+(?:\\.\\d+)?)(?= \\| |$)`))
+        if (match) return Number(match[1])
+    }
+    return null
 }
 
 function fractionField(message, name) {
