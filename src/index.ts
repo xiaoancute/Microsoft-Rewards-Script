@@ -661,16 +661,23 @@ export class MicrosoftRewardsBot {
      * 不再空等 1-4 分钟；间隔时长同时打到 INFO 日志，避免看起来像卡死。
      */
     private async runWorkers(label: string, task: () => Promise<unknown>): Promise<void> {
+        this.logger.info(this.isMobile, 'FLOW', `开始 "${label}"`)
         const startedAt = Date.now()
         await task()
-        await this.gapBetweenWorkers(label, Date.now() - startedAt)
+        const spentMs = Date.now() - startedAt
+        await this.gapBetweenWorkers(label, spentMs)
     }
 
     private async gapBetweenWorkers(label?: string, spentMs?: number): Promise<void> {
         const idle = spentMs !== undefined && spentMs < 2000
         const delayMs = idle ? this.utils.randomDelay(3000, 8000) : this.utils.randomDelay(60000, 240000)
-        const reason = label ? (idle ? `"${label}" 无需处理` : `"${label}" 已完成`) : '继续下一个步骤'
-        this.logger.info(this.isMobile, 'FLOW', `${reason} | 等待 ${Math.round(delayMs / 1000)} 秒后继续`)
+        const spentText = spentMs !== undefined ? `耗时 ${(spentMs / 1000).toFixed(1)}s | ` : ''
+        const reason = label ? (idle ? `"${label}" 无需处理` : `"${label}" 完成`) : '继续下一个步骤'
+        this.logger.info(
+            this.isMobile,
+            'FLOW',
+            `${reason} | ${spentText}等待 ${Math.round(delayMs / 1000)} 秒后继续`
+        )
         await this.utils.wait(delayMs)
     }
 
