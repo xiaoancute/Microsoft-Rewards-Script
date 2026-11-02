@@ -183,12 +183,15 @@ export class Search extends BaseActivity {
                     await this.clickRandomLink(page, isMobile)
                 }
 
-                await this.bot.utils.wait(
-                    this.bot.utils.randomDelay(
-                        this.bot.config.searchSettings.searchDelay.min,
-                        this.bot.config.searchSettings.searchDelay.max
-                    )
+                // 间隔可能长达十几分钟，必须打出来，否则看起来像进程卡死
+                const delayMs = this.bot.utils.randomDelay(
+                    this.bot.config.searchSettings.searchDelay.min,
+                    this.bot.config.searchSettings.searchDelay.max
                 )
+                const delayText =
+                    delayMs >= 60000 ? `${Math.round(delayMs / 60000)} 分钟` : `${Math.round(delayMs / 1000)} 秒`
+                this.bot.logger.info(isMobile, 'SEARCH-BING', `本轮搜索完成 | 等待 ${delayText} 后继续下一次`)
+                await this.bot.utils.wait(delayMs)
 
                 return
             } catch (error) {

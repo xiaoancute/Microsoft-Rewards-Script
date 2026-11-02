@@ -655,9 +655,22 @@ export class MicrosoftRewardsBot {
         return accountStats
     }
 
-    private async gapBetweenWorkers(): Promise<void> {
-        const delayMs = this.utils.randomDelay(60000, 240000)
-        this.logger.debug(this.isMobile, 'FLOW', `大任务间隔等待 | ${Math.round(delayMs / 1000)}秒`)
+    /**
+     * 执行一个活动分组，结束后插入间隔。
+     * 分组几乎瞬间返回说明本来就没活可干（任务全部已完成），只等几秒，
+     * 不再空等 1-4 分钟；间隔时长同时打到 INFO 日志，避免看起来像卡死。
+     */
+    private async runWorkers(label: string, task: () => Promise<unknown>): Promise<void> {
+        const startedAt = Date.now()
+        await task()
+        await this.gapBetweenWorkers(label, Date.now() - startedAt)
+    }
+
+    private async gapBetweenWorkers(label?: string, spentMs?: number): Promise<void> {
+        const idle = spentMs !== undefined && spentMs < 2000
+        const delayMs = idle ? this.utils.randomDelay(3000, 8000) : this.utils.randomDelay(60000, 240000)
+        const reason = label ? (idle ? `"${label}" 无需处理` : `"${label}" 已完成`) : '继续下一个步骤'
+        this.logger.info(this.isMobile, 'FLOW', `${reason} | 等待 ${Math.round(delayMs / 1000)} 秒后继续`)
         await this.utils.wait(delayMs)
     }
 
@@ -941,12 +954,10 @@ export class MicrosoftRewardsBot {
                         await this.activities.doEnsureStreakProtection()
                     }
                     if (this.config.workers.doPunchCards) {
-                        await this.activities.doPunchCardsMobile(data)
-                        await this.gapBetweenWorkers()
+                        await this.runWorkers('打卡任务', () => this.activities.doPunchCardsMobile(data))
                     }
                     if (this.config.workers.doActivateSearchPerk) {
-                        await this.activities.doActivateSearchPerk(data)
-                        await this.gapBetweenWorkers()
+                        await this.runWorkers('搜索特权', () => this.activities.doActivateSearchPerk(data))
                     }
 
                     const plan = await this.searchManager.getSearchPoints()
@@ -969,24 +980,19 @@ export class MicrosoftRewardsBot {
                     }
 
                     if (this.config.workers.doDailySet) {
-                        await this.activities.doDailySet(data)
-                        await this.gapBetweenWorkers()
+                        await this.runWorkers('每日任务', () => this.activities.doDailySet(data))
                     }
                     if (this.config.workers.doMorePromotions) {
-                        await this.activities.doMorePromotions(data)
-                        await this.gapBetweenWorkers()
+                        await this.runWorkers('更多推广', () => this.activities.doMorePromotions(data))
                     }
                     if (appAvailable && this.config.workers.doDailyCheckIn) {
-                        await this.activities.doDailyCheckIn()
-                        await this.gapBetweenWorkers()
+                        await this.runWorkers('每日签到', () => this.activities.doDailyCheckIn())
                     }
                     if (appAvailable && this.config.workers.doAppPromotions && appData) {
-                        await this.activities.doAppPromotions(appData)
-                        await this.gapBetweenWorkers()
+                        await this.runWorkers('App 活动', () => this.activities.doAppPromotions(appData))
                     }
                     if (appAvailable && this.config.workers.doReadToEarn) {
-                        await this.activities.doReadToEarn()
-                        await this.gapBetweenWorkers()
+                        await this.runWorkers('读文赚分', () => this.activities.doReadToEarn())
                     }
 
                     if (doMobileSearch) mobilePoints = await this.searchManager.searchMobile(account)
@@ -997,32 +1003,25 @@ export class MicrosoftRewardsBot {
                         await this.activities.doEnsureStreakProtection()
                     }
                     if (this.config.workers.doDailySet) {
-                        await this.activities.doDailySet(data)
-                        await this.gapBetweenWorkers()
+                        await this.runWorkers('每日任务', () => this.activities.doDailySet(data))
                     }
                     if (this.config.workers.doActivateSearchPerk) {
-                        await this.activities.doActivateSearchPerk(data)
-                        await this.gapBetweenWorkers()
+                        await this.runWorkers('搜索特权', () => this.activities.doActivateSearchPerk(data))
                     }
                     if (this.config.workers.doMorePromotions) {
-                        await this.activities.doMorePromotions(data)
-                        await this.gapBetweenWorkers()
+                        await this.runWorkers('更多推广', () => this.activities.doMorePromotions(data))
                     }
                     if (appAvailable && this.config.workers.doDailyCheckIn) {
-                        await this.activities.doDailyCheckIn()
-                        await this.gapBetweenWorkers()
+                        await this.runWorkers('每日签到', () => this.activities.doDailyCheckIn())
                     }
                     if (appAvailable && this.config.workers.doAppPromotions && appData) {
-                        await this.activities.doAppPromotions(appData)
-                        await this.gapBetweenWorkers()
+                        await this.runWorkers('App 活动', () => this.activities.doAppPromotions(appData))
                     }
                     if (appAvailable && this.config.workers.doReadToEarn) {
-                        await this.activities.doReadToEarn()
-                        await this.gapBetweenWorkers()
+                        await this.runWorkers('读文赚分', () => this.activities.doReadToEarn())
                     }
                     if (this.config.workers.doPunchCards) {
-                        await this.activities.doPunchCardsMobile(data)
-                        await this.gapBetweenWorkers()
+                        await this.runWorkers('打卡任务', () => this.activities.doPunchCardsMobile(data))
                     }
 
                     const plan = await this.searchManager.getSearchPoints()
