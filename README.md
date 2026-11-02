@@ -33,6 +33,7 @@
 - [✨ 核心特性](#-核心特性)
 - [🚀 快速开始](#-快速开始)
 - [📦 Windows 部署](#-windows-部署)
+- [📱 Termux 部署（安卓）](#-termux-部署安卓)
 - [🐳 Docker 部署](#-docker-部署)
 - [🖥️ 控制 API 与面板](#️-控制-api-与面板)
 - [⚙️ 配置参考](#️-配置参考)
@@ -169,6 +170,31 @@
 </details>
 
 ---
+
+## 📱 Termux 部署（安卓）
+
+Patchright 没有 Android 原生浏览器包，Termux 下需要改用系统安装的 Chromium。
+
+```bash
+pkg update
+pkg install git nodejs x11-repo tur-repo
+pkg install chromium-beta
+```
+
+进入项目目录后照常准备 `.env` 和 `config.json`，然后安装、自检、构建并运行：
+
+```bash
+cp env.example .env
+cp config.example.json config.json
+npm run pre-build
+npm run smoke:browser
+npm run build
+npm run start
+```
+
+- 未检测到 `DISPLAY` / `WAYLAND_DISPLAY` 时会强制无头运行，即使 `config.json` 里 `headless` 是 `false`；配置了 Termux:X11 等显示服务后则按 `headless` 设置走。
+- 浏览器路径会自动从 Termux 前缀探测；想用其他 Chromium 兼容内核时，在环境变量或 `.env` 里设置 `BROWSER_EXECUTABLE_PATH`。
+- 由于 `impit` 没有 Android 原生包，Termux 下 API/查询类请求改用 Node 自带的 fetch 传输；HTTP(S) 和 SOCKS5 查询代理仍然可用，SOCKS4 只有浏览器支持、查询传输不支持。
 
 ## 🐳 Docker 部署
 

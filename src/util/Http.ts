@@ -1,6 +1,7 @@
-import { Impit } from 'impit'
 import type { HttpMethod, ImpitResponse, RequestInit as ImpitRequestInit } from 'impit'
 import type { AccountProxy } from '../interface/Account'
+import { createHttpTransport } from './HttpTransport'
+import type { HttpTransport } from './HttpTransport'
 import { parseBrowserProxyUrl } from './Proxy'
 
 const DEFAULT_TIMEOUT = 20000
@@ -123,7 +124,7 @@ function backoff(retry: number): Promise<void> {
 }
 
 async function send<T>(
-    instance: Impit,
+    instance: HttpTransport,
     url: string,
     init: ImpitRequestInit,
     config: HttpRequestConfig
@@ -168,8 +169,8 @@ async function send<T>(
 }
 
 class HttpClient {
-    private instance: Impit
-    private direct?: Impit
+    private instance: HttpTransport
+    private direct?: HttpTransport
     private account: AccountProxy
     private defaultHeaders: Record<string, unknown>
 
@@ -179,7 +180,7 @@ class HttpClient {
 
         const proxyUrl = this.account.url && this.account.proxyHttp ? this.buildProxyUrl(this.account) : undefined
 
-        this.instance = new Impit({ browser: 'chrome', proxyUrl, timeout: DEFAULT_TIMEOUT })
+        this.instance = createHttpTransport(DEFAULT_TIMEOUT, proxyUrl)
     }
 
     public setDefaultHeaders(headers: Record<string, unknown>): void {
@@ -194,7 +195,7 @@ class HttpClient {
         const { url, init } = toInit(requestConfig)
 
         if (!useProxy) {
-            if (!this.direct) this.direct = new Impit({ browser: 'chrome', timeout: DEFAULT_TIMEOUT })
+            if (!this.direct) this.direct = createHttpTransport(DEFAULT_TIMEOUT)
             return send<T>(this.direct, url, init, requestConfig)
         }
 
@@ -218,10 +219,10 @@ class HttpClient {
     }
 }
 
-let sharedInstance: Impit | undefined
+let sharedInstance: HttpTransport | undefined
 
 export async function httpRequest<T = unknown>(config: HttpRequestConfig): Promise<HttpResponse<T>> {
-    if (!sharedInstance) sharedInstance = new Impit({ browser: 'chrome', timeout: DEFAULT_TIMEOUT })
+    if (!sharedInstance) sharedInstance = createHttpTransport(DEFAULT_TIMEOUT)
     const { url, init } = toInit(config)
     return send<T>(sharedInstance, url, init, config)
 }

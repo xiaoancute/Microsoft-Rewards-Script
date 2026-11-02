@@ -1,4 +1,4 @@
-import rebrowser, { BrowserContext } from 'patchright'
+import type { Browser as PatchrightBrowser, BrowserContext } from 'patchright'
 import { newInjectedContext } from 'fingerprint-injector'
 import { BrowserFingerprintWithHeaders, FingerprintGenerator } from 'fingerprint-generator'
 
@@ -8,6 +8,13 @@ import { fingerprintMatchesLocale } from '../util/Locale'
 import { formatBrowserProxyServer } from '../util/Proxy'
 import { UserAgentManager } from './UserAgent'
 import { URLs } from '../constants/urls'
+import {
+    getEffectiveHeadless,
+    isTermuxRuntime,
+    nativePlatform,
+    preparePatchrightPlatform,
+    requireTermuxBrowserExecutable
+} from '../util/RuntimePlatform'
 
 import type { Account } from '../interface/Account'
 
@@ -49,15 +56,18 @@ class Browser {
     }
 
     async createBrowser(account: Account): Promise<BrowserCreationResult> {
-        const headless = this.bot.config.headless
+        preparePatchrightPlatform()
+        const headless = getEffectiveHeadless(this.bot.config.headless)
         const channel = this.bot.config.browserChannel ?? 'chromium'
-        // 真实 Edge 依赖系统安装；linux（docker）环境通常没有，回退内置补丁版 Chromium
-        const useRealEdge = channel === 'msedge' && process.platform !== 'linux'
+        const executablePath = requireTermuxBrowserExecutable(headless)
+        // 真实 Edge 依赖系统安装；linux（docker）/Termux 环境通常没有，回退内置补丁版 Chromium
+        const useRealEdge = channel === 'msedge' && !executablePath && process.platform !== 'linux'
+        const { chromium } = await import('patchright')
 
         const hasProxy = Boolean(account.proxy.url)
         const ignoreCertificateErrors = hasProxy && this.bot.config.proxy.ignoreCertificateErrors
 
-        let browser: rebrowser.Browser
+        let browser: PatchrightBrowser
         try {
             const proxyConfig = account.proxy.url
                 ? {
@@ -71,7 +81,7 @@ class Browser {
                 : undefined
 
             const runningAsRoot = typeof process.getuid === 'function' && process.getuid() === 0
-            const sandboxDisabled = process.platform === 'linux' && runningAsRoot
+            const sandboxDisabled = isTermuxRuntime || (process.platform === 'linux' && runningAsRoot)
             const sandboxArgs = sandboxDisabled ? ['--no-sandbox', '--disable-setuid-sandbox'] : []
 
             const certArgs = ignoreCertificateErrors
@@ -102,17 +112,26 @@ class Browser {
                 )
             }
 
+            if (headless !== this.bot.config.headless) {
+                this.bot.logger.warn(
+                    this.bot.isMobile,
+                    'BROWSER',
+                    'Termux has no display server; forcing headless browser mode'
+                )
+            }
+
             this.bot.logger.info(
                 this.bot.isMobile,
                 'BROWSER',
                 useRealEdge
-                    ? `正在启动真实 Edge (channel=msedge) | headless=${headless} | platform=${process.platform} | proxy=${hasProxy ? 'yes' : 'no'} | tls=${ignoreCertificateErrors ? 'verification-disabled' : 'verified'}`
-                    : `正在启动内置的补丁版 Chromium (Edge UA) | headless=${headless} | platform=${process.platform} | proxy=${hasProxy ? 'yes' : 'no'} | tls=${ignoreCertificateErrors ? 'verification-disabled' : 'verified'} | sandbox=${sandboxDisabled ? 'disabled-root' : 'enabled'}`
+                    ? `正在启动真实 Edge (channel=msedge) | headless=${headless} | platform=${nativePlatform} | proxy=${hasProxy ? 'yes' : 'no'} | tls=${ignoreCertificateErrors ? 'verification-disabled' : 'verified'}`
+                    : `正在启动${executablePath ? `系统 Chromium (${executablePath})` : '内置的补丁版 Chromium'} (Edge UA) | headless=${headless} | platform=${nativePlatform} | proxy=${hasProxy ? 'yes' : 'no'} | tls=${ignoreCertificateErrors ? 'verification-disabled' : 'verified'} | sandbox=${sandboxDisabled ? 'disabled' : 'enabled'}`
             )
 
-            browser = await rebrowser.chromium.launch({
+            browser = await chromium.launch({
                 headless,
                 ...(useRealEdge && { channel: 'msedge' as const }),
+                ...(executablePath && { executablePath }),
                 ...(proxyConfig && { proxy: proxyConfig }),
                 args: [...Browser.BROWSER_ARGS, ...sandboxArgs, ...certArgs]
             })
@@ -131,16 +150,10 @@ class Browser {
                     this.bot.isMobile,
                     'SESSION',
                     `正在恢复已保存的浏览器会话 | Cookie数=${session.storageState.cookies.length} | origins=${session.storageState.origins.length} | 已保存分钟数=${ageMinutes}` +
-                        (session.expiredCookiesRemoved
-                            ? ` | 已清除过期Cookie=${session.expiredCookiesRemoved}`
-                            : '')
+                        (session.expiredCookiesRemoved ? ` | 已清除过期Cookie=${session.expiredCookiesRemoved}` : '')
                 )
             } else {
-                this.bot.logger.info(
-                    this.bot.isMobile,
-                    'SESSION',
-                    '未找到已保存的浏览器会话；可能需要登录'
-                )
+                this.bot.logger.info(this.bot.isMobile, 'SESSION', '未找到已保存的浏览器会话；可能需要登录')
             }
 
             const shouldUseFingerprint = this.bot.isMobile
@@ -181,8 +194,7 @@ class Browser {
                 }
 
                 fingerprint =
-                    (reuseFingerprint && savedFingerprint) ||
-                    (await this.generateFingerprint(this.bot.isMobile))
+                    (reuseFingerprint && savedFingerprint) || (await this.generateFingerprint(this.bot.isMobile))
 
                 const screen = fingerprint.fingerprint.screen
 
@@ -220,9 +232,7 @@ class Browser {
             }
 
             context.on('page', p => {
-                p.on('crash', () =>
-                    this.bot.logger.error(this.bot.isMobile, 'BROWSER', `渲染器崩溃 | ${p.url()}`)
-                )
+                p.on('crash', () => this.bot.logger.error(this.bot.isMobile, 'BROWSER', `渲染器崩溃 | ${p.url()}`))
             })
             context.on('close', () => this.bot.logger.warn(this.bot.isMobile, 'BROWSER', '浏览器上下文已关闭'))
 
@@ -248,7 +258,7 @@ class Browser {
 
     async generateFingerprint(isMobile: boolean): Promise<BrowserFingerprintWithHeaders> {
         const hostOs: 'windows' | 'macos' | 'linux' =
-            process.platform === 'darwin' ? 'macos' : process.platform === 'linux' ? 'linux' : 'windows'
+            nativePlatform === 'darwin' ? 'macos' : nativePlatform === 'win32' ? 'windows' : 'linux'
 
         const fingerPrintData = this.fingerprintGenerator.getFingerprint({
             devices: isMobile ? ['mobile'] : ['desktop'],
@@ -265,7 +275,7 @@ class Browser {
      * 读取原始值并替换为真实形态（Chrome/{major}.0.0.0 ... Edg/{major}.0.0.0），
      * 供 newContext 显式覆盖 navigator 与 HTTP 头。
      */
-    private async resolveNativeUserAgent(browser: rebrowser.Browser): Promise<string> {
+    private async resolveNativeUserAgent(browser: PatchrightBrowser): Promise<string> {
         const tempContext = await browser.newContext()
         const page = await tempContext.newPage()
         try {
